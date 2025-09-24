@@ -181,7 +181,7 @@ runs:
 
          echo "::group:: Installing Building Depend Packages"
          "SU" apt-get update
-         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel
+         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel qemu-user-static
          echo "::endgroup::"
 
          download_and_extract() {
@@ -525,6 +525,7 @@ runs:
 
                     cp "${STAGING_KERNEL_ABS}" kernel
                     echo "[-] Patching kernel with ${module_file}"
+                    echo "\"${KPT_TOOL}\" -p -i kernel -k kpimg-linux -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
                     "${KPT_TOOL}" -p -i kernel -k kpimg-linux -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
 
                     local is_rekernel
