@@ -11,7 +11,7 @@ jobs:
       contents: read
     steps:
       - name: Build Kernel
-        uses: dabao1955/kernel_build_action@main
+        uses: vxd303/build-kn@main
         with:
           # Thay đổi URL chỉ còn đường dẫn repo
           kernel-url: https://github.com/vxd303/kernel_PixelExperience_exynos9810
