@@ -1,33 +1,54 @@
-# A simple action usage
-name: Build Kernel
+name: Demo Kernel Build
+
 on:
   workflow_dispatch:
+    inputs:
+      rekernel-key:
+        description: 'License key dùng cho KernelPatch khi kích hoạt Re-Kernel'
+        required: true
+        type: string
+      rekernel-flavor:
+        description: 'Biến thể Re-Kernel muốn áp dụng (main hoặc network)'
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - network
+
 jobs:
-  Build-Kernel:
-    strategy:
-      fail-fast: false
+  build:
+    name: Build và vá kernel mẫu
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
-      - name: Build Kernel
-        uses: vxd303/build-kn@main
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Thiết lập giấy phép KernelPatch
+        id: license
+        run: echo "REKERNEL_KEY=${{ github.event.inputs.rekernel-key }}" >> $GITHUB_ENV
+
+      - name: Chạy action build-kn với Re-Kernel
+        uses: ./
         with:
-          # Thay đổi URL chỉ còn đường dẫn repo
-          kernel-url: https://github.com/vxd303/kernel_PixelExperience_exynos9810
-          # Thêm tham số repo-token để xác thực
-          repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          pass-zip: ${{ secrets.PASSZIP }}
-          kernel-dir: msm-4.19
-          kernel-branch: twelve-test-2
-          config: exynos9810-starlte_defconfig
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          kernel-url: https://github.com/bmax121/android_kernel_xiaomi_sm8350/archive/refs/heads/main.zip
+          kernel-branch: main
+          config: vendor/godin_defconfig
           arch: arm64
-          aosp-gcc: true
-          aosp-clang: true
-          ksu: false
-          ksu-version: v0.7.0
-          android-version: 12
-          aosp-clang-version: r383902
-          python-27: true
-          disable-lto: true
+          rekernel: true
+          rekernel-key: ${{ env.REKERNEL_KEY }}
+          rekernel-flavor: ${{ github.event.inputs.rekernel-flavor }}
           anykernel3: true
+          anykernel3-url: https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip
+          bootimg-url: https://github.com/bmax121/KernelPatch/releases/download/test-artifacts/boot.img
+
+      - name: Lưu artifact kernel đã vá
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-kernel-demo
+          path: build
