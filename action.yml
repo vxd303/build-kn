@@ -482,7 +482,7 @@ runs:
             mv *.img ../../../build/boot.img -v
             cd ..
             echo "::endgroup::"
-else
+            else
             # ---[ Re-Kernel patching (KernelPatch) BEFORE AnyKernel3 packaging ]---
             if [ ${{ inputs.rekernel }} = true ]; then
                 echo "::group:: Applying KernelPatch to built kernel"
@@ -602,7 +602,6 @@ else
                 fi
                 echo "::endgroup::"
             fi
-
             echo "::group:: Packaging Anykernel3 flasher"
             if [ ! -z ${{ inputs.anykernel3-url }} ]; then
                 git clone ${{ inputs.anykernel3-url }} AnyKernel3
