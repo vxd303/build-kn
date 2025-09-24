@@ -467,10 +467,16 @@ runs:
                   exit 1
                 fi
 
-                # 2) Copy ra cùng level với kpm để tool dùng
-                cp -f "$KERNEL_OUT_PATH" ./kernel
-                if [ ! -s ./kernel ]; then
-                  echo "::error:: Copy built kernel to ./kernel failed (empty or missing)."
+                # 2) Chuẩn bị bản sao tạm thời của kernel để patch
+                STAGING_KERNEL=$(mktemp -p "$PWD" kernel_patch.XXXXXX.img)
+                cp -f "$KERNEL_OUT_PATH" "$STAGING_KERNEL"
+                if [ ! -s "$STAGING_KERNEL" ]; then
+                  echo "::error:: Copy built kernel into staging file failed (empty or missing)."
+                  exit 1
+                fi
+                STAGING_KERNEL_ABS=$(realpath "$STAGING_KERNEL" 2>/dev/null || true)
+                if [ -z "$STAGING_KERNEL_ABS" ] || [ ! -f "$STAGING_KERNEL_ABS" ]; then
+                  echo "::error:: Failed to resolve staging kernel absolute path."
                   exit 1
                 fi
 
@@ -512,12 +518,12 @@ runs:
                       echo "::error:: ${module_file} not found for patching."
                       return 1
                     fi
-                    if [ ! -f "../kernel" ]; then       # đúng vì đang ở kpm/
+                    if [ ! -f "${STAGING_KERNEL_ABS}" ]; then
                       echo "::error:: Kernel file not found for patching."
                       return 1
                     fi
 
-                    cp ../kernel kernel
+                    cp "${STAGING_KERNEL_ABS}" kernel
                     echo "[-] Patching kernel with ${module_file}"
                     "${KPT_TOOL}" -p -i kernel -k kpimg-linux -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
 
@@ -534,7 +540,7 @@ runs:
                       return 1
                     fi
 
-                    cp -f "${output_name}" ../kernel
+                    cp -f "${output_name}" "${STAGING_KERNEL_ABS}"
                     rm -f kernel "${output_name}"
                     return 0
                   }
@@ -551,10 +557,11 @@ runs:
                 popd >/dev/null
 
                 # 4) Ghi đè file Image đã build bằng bản đã vá
-                if [ -f ./kernel ]; then
-                  cp -f ./kernel "$KERNEL_OUT_PATH"
+                if [ -f "$STAGING_KERNEL_ABS" ]; then
+                  cp -f "$STAGING_KERNEL_ABS" "$KERNEL_OUT_PATH"
                   echo "[✓] Patched kernel written back to $KERNEL_OUT_PATH"
                 fi
+                rm -f "$STAGING_KERNEL"
                 echo "::endgroup::"
               fi
             echo "::group:: Packaging Anykernel3 flasher"
