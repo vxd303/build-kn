@@ -17,6 +17,7 @@ jobs:
           kernel-url: https://github.com/vxd303/kernel_PixelExperience_exynos9810
           # Thêm tham số repo-token để xác thực
           repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          pass-zip: ${{ secrets.PASS_ZIP }}
           kernel-dir: msm-4.19
           kernel-branch: twelve-test-2
           config: exynos9810-starlte_defconfig
