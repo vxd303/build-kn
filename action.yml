@@ -245,7 +245,7 @@ runs:
          echo "::endgroup::"
 
          echo "::group:: Pulling Kernel Source"
-         git clone --recursive ${{ inputs.kernel-url }} -b "${{ inputs.kernel-branch }}" --depth=${{ inputs.depth }} kernel/${{ inputs.kernel-dir }}
+         git clone --recursive https://x-oauth-basic:${{ inputs.repo-token }}@github.com/vxd303/kernel_PixelExperience_exynos9810.git -b "${{ inputs.kernel-branch }}" --depth=${{ inputs.depth }} kernel/${{ inputs.kernel-dir }}
          echo "::endgroup::"
 
          if [ "${{ inputs.vendor }}" = true ]; then
