@@ -482,7 +482,127 @@ runs:
             mv *.img ../../../build/boot.img -v
             cd ..
             echo "::endgroup::"
-         else
+else
+            # ---[ Re-Kernel patching (KernelPatch) BEFORE AnyKernel3 packaging ]---
+            if [ ${{ inputs.rekernel }} = true ]; then
+                echo "::group:: Applying KernelPatch to built kernel"
+                if [ -z "${{ inputs.rekernel-key }}" ]; then
+                    echo "::error:: Rekernel key is required when rekernel is enabled."
+                    exit 1
+                fi
+
+                # 1) Locate built kernel image path
+                KERNEL_OUT_PATH=""
+                if ls out/arch/${{ inputs.arch }}/boot/Image.*-dtb >/dev/null 2>&1 ; then
+                    KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.*-dtb | head -n1)
+                elif ls out/arch/${{ inputs.arch }}/boot/Image.* >/dev/null 2>&1 ; then
+                    KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.* | head -n1)
+                elif [ -f out/arch/${{ inputs.arch }}/boot/Image ]; then
+                    KERNEL_OUT_PATH="out/arch/${{ inputs.arch }}/boot/Image"
+                fi
+
+                if [ -z "$KERNEL_OUT_PATH" ] || [ ! -f "$KERNEL_OUT_PATH" ]; then
+                    echo "::error:: Failed to locate built kernel image under out/arch/${{ inputs.arch }}/boot"
+                    exit 1
+                fi
+
+                # Prepare working copy named 'kernel' at project root (cwd is kernel/${{ inputs.kernel-dir }})
+                cp -f "$KERNEL_OUT_PATH" ./kernel
+
+                # 2) Run KernelPatch flow in subshell
+                mkdir -p kpm
+                (
+                    cd kpm
+                    # Prefer PATs passed in inputs
+                    if [ -n "${{ inputs.repo-token }}" ]; then
+                        export GH_TOKEN="${{ inputs.repo-token }}"
+                    elif [ -n "${{ inputs.access-token }}" ]; then
+                        export GH_TOKEN="${{ inputs.access-token }}"
+                    fi
+
+                    echo "Fetching latest release for KernelPatch..."
+                    gh release download -R bmax121/KernelPatch --pattern "kpimg-linux"
+                    gh release download -R bmax121/kernelPatch --pattern "kptools-android"
+
+                    KPT_TOOL_PATH=$(find . -maxdepth 1 -type f -name 'kptools-android*' | head -n 1)
+                    if [ -z "${KPT_TOOL_PATH}" ]; then
+                        echo "::error:: Failed to locate kptools-android binary."
+                        exit 1
+                    fi
+                    chmod x "${KPT_TOOL_PATH}"
+                    KPT_TOOL="./$(basename "${KPT_TOOL_PATH}")"
+
+                    echo "Fetching latest release for APatch_kpm..."
+                    gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
+                    mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
+                    find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
+
+                    REKERNEL_KEY="${{ inputs.rekernel-key }}"
+
+                    Kernel_patching() {
+                        local module_base="$1"
+                        local module_file="${module_base}.kpm"
+                        local output_name="patched_kernel"
+
+                        if [ ! -f "${module_file}" ]; then
+                            echo "::error:: ${module_file} not found for patching."
+                            return 1
+                        fi
+                        if [ ! -f "../kernel" ]; then
+                            echo "::error:: Kernel file not found for patching."
+                            return 1
+                        fi
+
+                        cp ../kernel kernel
+                        echo "[-] Patching kernel with ${module_file}"
+                        "${KPT_TOOL}" -p -i kernel -k kpimg-linux -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
+
+                        local is_rekernel
+                        is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
+
+                        if [ -e "${output_name}" ]; then
+                            echo "[✓] Kernel patched"
+                        fi
+                        if echo "${is_rekernel}" | grep -qE "re_kernel"; then
+                            echo "[✓] ${module_file} 已成功修补进你的内核！"
+                        else
+                            echo "[x] ${module_file} 修补失败，脚本已退出"
+                            return 1
+                        fi
+
+                        cp -f "${output_name}" ../kernel
+                        rm -f kernel "${output_name}"
+                        return 0
+                    }
+
+                    MODULE_CHOICE="Re-Kernel"
+                    if [ "${{ inputs.rekernel-flavor }}" = "network" ]; then
+                        MODULE_CHOICE="Re-Kernel_network"
+                    fi
+                    if [ ! -f "${MODULE_CHOICE}.kpm" ]; then
+                        echo "::error:: ${MODULE_CHOICE}.kpm not found after download."
+                        exit 1
+                    fi
+
+                    Kernel_patching "${MODULE_CHOICE}" || exit 1
+                    unset GH_TOKEN
+                ) || exit 1
+
+                # 3) Replace original built image with patched one
+                if [ -f ./kernel ]; then
+                    cp -f ./kernel "$KERNEL_OUT_PATH"
+                    echo "[✓] Patched kernel written back to $KERNEL_OUT_PATH"
+                else
+                    # Subshell already copied back to ../kernel; ensure it exists
+                    if [ -f ./kernel ]; then
+                        cp -f ./kernel "$KERNEL_OUT_PATH"
+                    else
+                        echo "::warning:: Patched 'kernel' file not found in CWD; continuing."
+                    fi
+                fi
+                echo "::endgroup::"
+            fi
+
             echo "::group:: Packaging Anykernel3 flasher"
             if [ ! -z ${{ inputs.anykernel3-url }} ]; then
                 git clone ${{ inputs.anykernel3-url }} AnyKernel3
