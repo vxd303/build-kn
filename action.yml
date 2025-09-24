@@ -9,11 +9,11 @@ inputs:
   rekernel-key:
     description: 'Re-Kernel secret key for kpm'
     required: false
-    default: true
+    default: "re_kernel_7.0.1.kpm"
   rekernel-flavor:
     description: 'Re-Kernel module flavor: "", "network"'
     required: false
-    default: "re_kernel_7.0.1.kpm"
+    default: true
   kernel-url:
     description: 'Kernel Source Url'
     required: true
@@ -449,13 +449,9 @@ runs:
             echo "::endgroup::"
             else
             # ---[ Re-Kernel patching (KernelPatch) BEFORE AnyKernel3 packaging ]---
-            if [ ${{ inputs.rekernel }} = true ]; then
+            if [ ${{ inputs.rekernel-flavor }} = true ]; then
                 echo "::group:: Applying KernelPatch to built kernel"
-                if [ -z "${{ inputs.rekernel-key }}" ]; then
-                    echo "::error:: Rekernel key is required when rekernel is enabled."
-                    exit 1
-                fi
-
+                
                 # 1) Locate built kernel image path
                 KERNEL_OUT_PATH=""
                 if ls out/arch/${{ inputs.arch }}/boot/Image.*-dtb >/dev/null 2>&1 ; then
