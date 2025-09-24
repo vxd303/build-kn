@@ -9,6 +9,9 @@ inputs:
   kernel-url:
     description: 'Kernel Source Url'
     required: true
+  repo-token:
+    description: 'Token'
+    required: false
   depth:
     required: false
     default: 1
