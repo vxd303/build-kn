@@ -6,6 +6,13 @@ branding:
   color: 'blue'
 
 inputs:
+  rekernel-key:
+    description: 'Re-Kernel secret key for kpm'
+    required: false
+  rekernel-flavor:
+    description: 'Re-Kernel module flavor: "", "network"'
+    required: false
+    default: ""
   kernel-url:
     description: 'Kernel Source Url'
     required: true
