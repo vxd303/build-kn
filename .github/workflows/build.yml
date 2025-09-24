@@ -2,7 +2,6 @@
 name: Build Kernel
 on:
   workflow_dispatch:
-
 jobs:
   Build-Kernel:
     strategy:
@@ -10,12 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
-    - name: Build Kernel
-      uses: dabao1955/kernel_build_action@main
-      with:
-          kernel-url: https://${{ secrets.PRIVATE_REPO_TOKEN }}:x-oauth-basic@github.com/vxd303/kernel_PixelExperience_exynos9810
+      - name: Build Kernel
+        uses: dabao1955/kernel_build_action@main
+        with:
+          # Thay đổi URL chỉ còn đường dẫn repo
+          kernel-url: https://github.com/vxd303/kernel_PixelExperience_exynos9810
+          # Thêm tham số repo-token để xác thực
+          repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           kernel-dir: msm-4.19
           kernel-branch: twelve-test-2
           config: exynos9810-starlte_defconfig
