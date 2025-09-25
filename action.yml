@@ -181,7 +181,7 @@ runs:
 
          echo "::group:: Installing Building Depend Packages"
          "SU" apt-get update
-         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel qemu-user-static gcc-aarch64-linux-gnu patchelf libc6-arm64-cross
+         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel
          echo "::endgroup::"
 
          download_and_extract() {
@@ -297,7 +297,43 @@ runs:
              touch nongki.txt
          elif [ "$PATCHLEVEL" -lt 10 ]; then
              echo false > nongki.txt
-         fi       
+         fi
+
+         if [ ${{ inputs.ksu }} = true ]; then
+            echo "::group:: Initializing KernelSU"
+            if [ -f KernelSU/kernel/Kconfig ]; then
+                echo "KernelSU has been initialized,skipped."
+            else
+                if [ ${{ inputs.ksu-other }} = true ]; then
+                    curl -SsL "${{ inputs.ksu-url }}/raw/${{ inputs.ksu-version }}/kernel/setup.sh" | bash -s ${{ inputs.ksu-version }}
+                else
+                    echo "Kernel version: $VERSION.$PATCHLEVEL.$SUBLEVEL"
+                    if [ -f nongki.txt ]; then
+                        printf "Warning: The KernelSU version you selected was detected to be ${{ inputs.ksu-version }}, but KernelSU has dropped support for the non-gki kernel since 0.9.5. \n This will force switch to v0.9.5.\n"
+                        export KVER=v0.9.5
+                    else
+                        export KVER=${{ inputs.ksu-version }}
+                    fi
+                    curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KVER"
+                fi
+            fi
+            if [ ${{ inputs.ksu-lkm }} = true ]; then
+                if grep -q "CONFIG_KPROBES=y" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}" ; then
+                    sed -i 's/CONFIG_KSU=y/CONFIG_KSU=m/g' "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
+                else
+                    #echo "CONFIG_KSU=m" | tee -a arch/${{ inputs.arch }}/configs/${{ inputs.config }}
+                    sed -i '/config KSU/,/help/{s/default y/default m/}' drivers/kernelsu/Kconfig
+                fi
+            elif [ -f nongki.txt ]; then
+                if grep -q "CONFIG_KPROBES=y" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}" ; then
+                    echo "CONFIG_KPROBES is enabled, skip patch."
+                else
+                    curl -SsL ${{ github.action_path }}/kernelsu/apply_cocci.sh | bash
+                fi
+            fi
+            echo "::endgroup::"
+         fi
+
          if [ ${{ inputs.rekernel }} = true ]; then
              echo "::group:: Initalizing Re-Kernel"
              curl -SsL ${{ github.action_path }}/rekernel/patch.sh | bash
@@ -456,61 +492,15 @@ runs:
 
                   echo "Fetching latest release for KernelPatch..."
                   gh release download -R bmax121/KernelPatch --pattern "kpimg-linux"
-                  gh release download -R bmax121/kernelPatch --pattern "kptools-android"
+                  gh release download -R bmax121/KernelPatch --pattern "kptools-linux" --tag 0.11.3
 
-                  KPT_TOOL_PATH=$(find . -maxdepth 1 -type f -name 'kptools-android*' | head -n 1)
+                  KPT_TOOL_PATH=$(find . -maxdepth 1 -type f -name 'kptools-linux*' | head -n 1)
                   if [ -z "${KPT_TOOL_PATH}" ]; then
-                    echo "::error:: Failed to locate kptools-android binary."
+                    echo "::error:: Failed to locate kptools-linux binary."
                     exit 1
                   fi
                   chmod +x "${KPT_TOOL_PATH}"
                   KPT_TOOL="./$(basename "${KPT_TOOL_PATH}")"
-
-                  # Prepare an AArch64 sysroot so qemu-user-static can satisfy the
-                  # glibc/ld dependencies required by kptools-android.
-                  SYSROOT_DIR="$PWD/sysroot"
-                  mkdir -p "${SYSROOT_DIR}/lib"
-
-                  copy_sysroot_lib() {
-                    local candidate
-                    candidate=$(find /usr/aarch64-linux-gnu -type f -name "$1" -print -quit 2>/dev/null || true)
-                    if [ -n "${candidate}" ]; then
-                      cp -L "${candidate}" "${SYSROOT_DIR}/lib/"
-                      return 0
-                    fi
-                    return 1
-                  }
-
-                  for lib in ld-linux-aarch64.so.1 libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 libgcc_s.so.1 librt.so.1 libresolv.so.2 libnss_dns.so.2 libnss_files.so.2; do
-                    if ! copy_sysroot_lib "${lib}"; then
-                      echo "::error:: Missing ${lib} from /usr/aarch64-linux-gnu (required for kptools)."
-                      exit 1
-                    fi
-                  done
-
-                  if [ ! -f "${SYSROOT_DIR}/lib/libz.so" ]; then
-                    echo "Bootstrapping libz for AArch64 sysroot..."
-                    ZLIB_VERSION=1.3.1
-                    curl -fsSL "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz" -o "zlib-${ZLIB_VERSION}.tar.gz"
-                    tar -xzf "zlib-${ZLIB_VERSION}.tar.gz"
-                    pushd "zlib-${ZLIB_VERSION}" >/dev/null
-                      CC=aarch64-linux-gnu-gcc \
-                      AR=aarch64-linux-gnu-ar \
-                      RANLIB=aarch64-linux-gnu-ranlib \
-                      STRIP=aarch64-linux-gnu-strip \
-                      ./configure --prefix="${SYSROOT_DIR}" --libdir="${SYSROOT_DIR}/lib" --includedir="${SYSROOT_DIR}/include"
-                      make -j"$(nproc)"
-                      make install
-                    popd >/dev/null
-                    rm -rf "zlib-${ZLIB_VERSION}" "zlib-${ZLIB_VERSION}.tar.gz"
-                    ln -sf libz.so.1 "${SYSROOT_DIR}/lib/libz.so"
-                  fi
-
-                  if command -v patchelf >/dev/null 2>&1; then
-                    patchelf --set-interpreter /lib/ld-linux-aarch64.so.1 --set-rpath /lib "${KPT_TOOL_PATH}"
-                  fi
-                  export QEMU_LD_PREFIX="${SYSROOT_DIR}"
-                  export QEMU_SET_ENV=LD_LIBRARY_PATH=/lib
 
                   echo "Fetching latest release for APatch_kpm..."
                   gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
