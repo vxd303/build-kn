@@ -181,7 +181,7 @@ runs:
 
          echo "::group:: Installing Building Depend Packages"
          "SU" apt-get update
-         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel qemu-user-static
+         "SU" apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python3 xz-utils aria2 build-essential ccache pigz coccinelle parallel qemu-user-static gcc-aarch64-linux-gnu patchelf libc6-arm64-cross
          echo "::endgroup::"
 
          download_and_extract() {
@@ -499,8 +499,54 @@ runs:
                     echo "::error:: Failed to locate kptools-android binary."
                     exit 1
                   fi
-                  chmod +x "${KPT_TOOL_PATH}"            # <<< FIX 1: thêm dấu +
+                  chmod +x "${KPT_TOOL_PATH}"
                   KPT_TOOL="./$(basename "${KPT_TOOL_PATH}")"
+
+                  # Prepare an AArch64 sysroot so qemu-user-static can satisfy the
+                  # glibc/ld dependencies required by kptools-android.
+                  SYSROOT_DIR="$PWD/sysroot"
+                  mkdir -p "${SYSROOT_DIR}/lib"
+
+                  copy_sysroot_lib() {
+                    local candidate
+                    candidate=$(find /usr/aarch64-linux-gnu -type f -name "$1" -print -quit 2>/dev/null || true)
+                    if [ -n "${candidate}" ]; then
+                      cp -L "${candidate}" "${SYSROOT_DIR}/lib/"
+                      return 0
+                    fi
+                    return 1
+                  }
+
+                  for lib in ld-linux-aarch64.so.1 libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 libgcc_s.so.1 librt.so.1 libresolv.so.2 libnss_dns.so.2 libnss_files.so.2; do
+                    if ! copy_sysroot_lib "${lib}"; then
+                      echo "::error:: Missing ${lib} from /usr/aarch64-linux-gnu (required for kptools)."
+                      exit 1
+                    fi
+                  done
+
+                  if [ ! -f "${SYSROOT_DIR}/lib/libz.so" ]; then
+                    echo "Bootstrapping libz for AArch64 sysroot..."
+                    ZLIB_VERSION=1.3.1
+                    curl -fsSL "https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz" -o "zlib-${ZLIB_VERSION}.tar.gz"
+                    tar -xzf "zlib-${ZLIB_VERSION}.tar.gz"
+                    pushd "zlib-${ZLIB_VERSION}" >/dev/null
+                      CC=aarch64-linux-gnu-gcc \
+                      AR=aarch64-linux-gnu-ar \
+                      RANLIB=aarch64-linux-gnu-ranlib \
+                      STRIP=aarch64-linux-gnu-strip \
+                      ./configure --prefix="${SYSROOT_DIR}" --libdir="${SYSROOT_DIR}/lib" --includedir="${SYSROOT_DIR}/include"
+                      make -j"$(nproc)"
+                      make install
+                    popd >/dev/null
+                    rm -rf "zlib-${ZLIB_VERSION}" "zlib-${ZLIB_VERSION}.tar.gz"
+                    ln -sf libz.so.1 "${SYSROOT_DIR}/lib/libz.so"
+                  fi
+
+                  if command -v patchelf >/dev/null 2>&1; then
+                    patchelf --set-interpreter /lib/ld-linux-aarch64.so.1 --set-rpath /lib "${KPT_TOOL_PATH}"
+                  fi
+                  export QEMU_LD_PREFIX="${SYSROOT_DIR}"
+                  export QEMU_SET_ENV=LD_LIBRARY_PATH=/lib
 
                   echo "Fetching latest release for APatch_kpm..."
                   gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
