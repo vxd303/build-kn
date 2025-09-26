@@ -453,7 +453,7 @@ runs:
               fi
             
               echo "Fetching latest release for KernelPatch..."
-              cp "${{ github.action_path }}/kpimg-linux" ./kpimg-linux
+              cp "${{ github.action_path }}/kpimg-android" ./kpimg-linux
               cp "${{ github.action_path }}/kptools-linux" ./kptools-linux
             
               if [ ! -s ./kpimg-linux ]; then
