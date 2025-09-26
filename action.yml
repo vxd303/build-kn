@@ -527,7 +527,7 @@ runs:
 
                     echo "[-] Patching kernel with ${module_file}"
                     echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
-                    "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
+                    "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -s "${REKERNEL_KEY}" -o "${output_name}"
 
                     local is_rekernel
                     is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
