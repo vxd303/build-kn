@@ -539,7 +539,6 @@ runs:
                       echo "[✓] ${module_file} 已成功修补进你的内核！"
                     else
                       echo "[x] ${module_file} 修补失败，脚本已退出"
-                      return 1
                     fi
 
                     if [ "${was_gzip}" -eq 1 ]; then
