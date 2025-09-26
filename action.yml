@@ -491,15 +491,20 @@ runs:
                   fi
 
                   echo "Fetching latest release for KernelPatch..."
-                  gh release download -R bmax121/KernelPatch --pattern "kpimg-linux"
-                  gh release download -R bmax121/KernelPatch --pattern "kptools-linux" --tag 0.11.3
-
-                  KPT_TOOL_PATH=$(find . -maxdepth 1 -type f -name 'kptools-linux*' | head -n 1)
-                  if [ -z "${KPT_TOOL_PATH}" ]; then
-                    echo "::error:: Failed to locate kptools-linux binary."
+                  cp "${{ github.action_path }}/kpimg-linux" ./kpimg-linux
+                  cp "${{ github.action_path }}/kptools-linux" ./kptools-linux
+                  
+                  if [ ! -s ./kpimg-linux ]; then
+                    echo "::error:: Failed to copy kpimg-linux from action repository."
                     exit 1
                   fi
-                  chmod +x "${KPT_TOOL_PATH}"
+                  
+                  if [ ! -s ./kptools-linux ]; then
+                    echo "::error:: Failed to copy kptools-linux from action repository."
+                    exit 1
+                  fi
+                  
+                  chmod +x ./kptools-linux
                   KPT_TOOL="./$(basename "${KPT_TOOL_PATH}")"
 
                   echo "Fetching latest release for APatch_kpm..."
