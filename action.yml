@@ -454,122 +454,149 @@ runs:
 
                 # 1) Locate built kernel image path
                 KERNEL_OUT_PATH=""
-                if ls out/arch/${{ inputs.arch }}/boot/Image.*-dtb >/dev/null 2>&1; then
-                  KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.*-dtb | head -n1)
-                elif ls out/arch/${{ inputs.arch }}/boot/Image.* >/dev/null 2>&1; then
-                  KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.* | head -n1)
-                elif [ -f out/arch/${{ inputs.arch }}/boot/Image ]; then
-                  KERNEL_OUT_PATH="out/arch/${{ inputs.arch }}/boot/Image"
+            if ls out/arch/${{ inputs.arch }}/boot/Image.*-dtb >/dev/null 2>&1; then
+              KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.*-dtb | head -n1)
+            elif ls out/arch/${{ inputs.arch }}/boot/Image.* >/dev/null 2>&1; then
+              KERNEL_OUT_PATH=$(ls -1 out/arch/${{ inputs.arch }}/boot/Image.* | head -n1)
+            elif [ -f out/arch/${{ inputs.arch }}/boot/Image ]; then
+              KERNEL_OUT_PATH="out/arch/${{ inputs.arch }}/boot/Image"
+            fi
+            
+            if [ -z "$KERNEL_OUT_PATH" ] || [ ! -f "$KERNEL_OUT_PATH" ]; then
+              echo "::error:: Failed to locate built kernel image under out/arch/${{ inputs.arch }}/boot"
+              exit 1
+            fi
+            
+            KERNEL_OUT_ABS=$(realpath "$KERNEL_OUT_PATH" 2>/dev/null || true)
+            if [ -z "$KERNEL_OUT_ABS" ] || [ ! -f "$KERNEL_OUT_ABS" ]; then
+              echo "::error:: Failed to resolve absolute path to built kernel image."
+              exit 1
+            fi
+            
+            KERNEL_BACKUP=$(mktemp -p "$PWD" kernel_backup.XXXXXX.img)
+            cp -f "$KERNEL_OUT_ABS" "$KERNEL_BACKUP"
+            if [ ! -s "$KERNEL_BACKUP" ]; then
+              echo "::error:: Failed to back up original kernel image."
+              exit 1
+            fi
+            
+            # 3) Run KernelPatch flow
+            mkdir -p kpm
+            pushd kpm >/dev/null
+              # Chọn token cho gh
+              if [ -n "${{ inputs.repo-token }}" ]; then
+                export GH_TOKEN="${{ inputs.repo-token }}"
+              elif [ -n "${{ inputs.access-token }}" ]; then
+                export GH_TOKEN="${{ inputs.access-token }}"
+              fi
+            
+              echo "Fetching latest release for KernelPatch..."
+              cp "${{ github.action_path }}/kpimg-linux" ./kpimg-linux
+              cp "${{ github.action_path }}/kptools-linux" ./kptools-linux
+            
+              if [ ! -s ./kpimg-linux ]; then
+                echo "::error:: Failed to copy kpimg-linux from action repository."
+                exit 1
+              fi
+            
+              if [ ! -s ./kptools-linux ]; then
+                echo "::error:: Failed to copy kptools-linux from action repository."
+                exit 1
+              fi
+            
+              chmod +x ./kpimg-linux ./kptools-linux
+            
+              KPIMG_BIN="${PWD}/kpimg-linux"
+              KPT_TOOL="${PWD}/kptools-linux"
+            
+              echo "Fetching latest release for APatch_kpm..."
+              gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
+              mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
+              find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
+            
+              REKERNEL_KEY="${{ inputs.rekernel-key }}"
+            
+              Kernel_patching() {
+                local module_base="$1"
+                local module_file="${module_base}.kpm"
+                local output_name="patched_kernel"
+            
+                if [ ! -f "${module_file}" ]; then
+                  echo "::error:: ${module_file} not found for patching."
+                  return 1
                 fi
-
-                if [ -z "$KERNEL_OUT_PATH" ] || [ ! -f "$KERNEL_OUT_PATH" ]; then
-                  echo "::error:: Failed to locate built kernel image under out/arch/${{ inputs.arch }}/boot"
-                  exit 1
+                if [ ! -f "${KERNEL_OUT_ABS}" ]; then
+                  echo "::error:: Kernel file not found for patching."
+                  return 1
                 fi
-
-                # 2) Chuẩn bị bản sao tạm thời của kernel để patch
-                STAGING_KERNEL=$(mktemp -p "$PWD" kernel_patch.XXXXXX.img)
-                cp -f "$KERNEL_OUT_PATH" "$STAGING_KERNEL"
-                if [ ! -s "$STAGING_KERNEL" ]; then
-                  echo "::error:: Copy built kernel into staging file failed (empty or missing)."
-                  exit 1
+            
+                cp -f "${KERNEL_OUT_ABS}" kernel
+                if [ ! -s kernel ]; then
+                  echo "::error:: Failed to stage kernel file for patching (empty)."
+                  return 1
                 fi
-                STAGING_KERNEL_ABS=$(realpath "$STAGING_KERNEL" 2>/dev/null || true)
-                if [ -z "$STAGING_KERNEL_ABS" ] || [ ! -f "$STAGING_KERNEL_ABS" ]; then
-                  echo "::error:: Failed to resolve staging kernel absolute path."
-                  exit 1
+            
+                local original_sha staged_sha
+                original_sha=$(sha256sum "${KERNEL_OUT_ABS}" | awk '{print $1}')
+                staged_sha=$(sha256sum kernel | awk '{print $1}')
+                echo "[i] Original kernel path: ${KERNEL_OUT_ABS}"
+                echo "[i] Original kernel SHA256: ${original_sha}"
+                echo "[i] -i kernel SHA256: ${staged_sha}"
+                if [ "${original_sha}" != "${staged_sha}" ]; then
+                  echo "::warning:: Staged kernel SHA256 mismatch; please verify copy integrity."
                 fi
-
-                # 3) Run KernelPatch flow
-                mkdir -p kpm
-                pushd kpm >/dev/null
-                  # Chọn token cho gh
-                  if [ -n "${{ inputs.repo-token }}" ]; then
-                    export GH_TOKEN="${{ inputs.repo-token }}"
-                  elif [ -n "${{ inputs.access-token }}" ]; then
-                    export GH_TOKEN="${{ inputs.access-token }}"
-                  fi
-
-                  echo "Fetching latest release for KernelPatch..."
-                  cp "${{ github.action_path }}/kpimg-linux" ./kpimg-linux
-                  cp "${{ github.action_path }}/kptools-linux" ./kptools-linux
-                  
-                  if [ ! -s ./kpimg-linux ]; then
-                    echo "::error:: Failed to copy kpimg-linux from action repository."
-                    exit 1
-                  fi
-                  
-                  if [ ! -s ./kptools-linux ]; then
-                    echo "::error:: Failed to copy kptools-linux from action repository."
-                    exit 1
-                  fi
-                  
-                  chmod +x ./kptools-linux
-                  KPIMG_BIN="${PWD}/kpimg-linux"
-                  KPT_TOOL="${PWD}/kptools-linux"
-                  
-                  echo "Fetching latest release for APatch_kpm..."
-                  gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
-                  mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
-                  find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
-                  
-                  REKERNEL_KEY="${{ inputs.rekernel-key }}"
-                  
-                  Kernel_patching() {
-                    local module_base="$1"
-                    local module_file="${module_base}.kpm"
-                    local output_name="patched_kernel"
-                  
-                    if [ ! -f "${module_file}" ]; then
-                      echo "::error:: ${module_file} not found for patching."
-                      return 1
-                    fi
-                    if [ ! -f "${STAGING_KERNEL_ABS}" ]; then
-                      echo "::error:: Kernel file not found for patching."
-                      return 1
-                    fi
-                  
-                    cp "${STAGING_KERNEL_ABS}" kernel
-                    echo "[-] Patching kernel with ${module_file}"
-                    echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
-                    "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
-
-                    local is_rekernel
-                    is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
-
-                    if [ -e "${output_name}" ]; then
-                      echo "[✓] Kernel patched"
-                    fi
-                    if echo "${is_rekernel}" | grep -qE "re_kernel"; then
-                      echo "[✓] ${module_file} 已成功修补进你的内核！"
-                    else
-                      echo "[x] ${module_file} 修补失败，脚本已退出"
-                      return 1
-                    fi
-
-                    cp -f "${output_name}" "${STAGING_KERNEL_ABS}"
-                    rm -f kernel "${output_name}"
-                    return 0
-                  }
-
-                  if ! Kernel_patching "Re-Kernel"; then
-                    exit 1
-                  fi
-
-                  if [ "${{ inputs.rekernel-flavor }}" = "network" ]; then
-                    if ! Kernel_patching "Re-Kernel_network"; then
-                      exit 1
-                    fi
-                  fi
-                popd >/dev/null
-
-                # 4) Ghi đè file Image đã build bằng bản đã vá
-                if [ -f "$STAGING_KERNEL_ABS" ]; then
-                  cp -f "$STAGING_KERNEL_ABS" "$KERNEL_OUT_PATH"
-                  echo "[✓] Patched kernel written back to $KERNEL_OUT_PATH"
+            
+                echo "[-] Patching kernel with ${module_file}"
+                echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
+                "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
+            
+                local is_rekernel
+                is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
+            
+                if [ -e "${output_name}" ]; then
+                  echo "[✓] Kernel patched"
                 fi
-                rm -f "$STAGING_KERNEL"
-                echo "::endgroup::"
+                if echo "${is_rekernel}" | grep -qE "re_kernel"; then
+                  echo "[✓] ${module_file} 已成功修补进你的内核！"
+                else
+                  echo "[x] ${module_file} 修补失败，脚本已退出"
+                  return 1
+                fi
+            
+                cp -f "${output_name}" "${KERNEL_OUT_ABS}"
+                rm -f kernel "${output_name}"
+                return 0
+              }
+            
+              PATCH_SUCCESS=1
+            
+              if ! Kernel_patching "Re-Kernel"; then
+                PATCH_SUCCESS=0
+              fi
+            
+              if [ "${{ inputs.rekernel-flavor }}" = "network" ] && [ "${PATCH_SUCCESS}" -eq 1 ]; then
+                if ! Kernel_patching "Re-Kernel_network"; then
+                  PATCH_SUCCESS=0
+                fi
+              fi
+            
+              if [ "${PATCH_SUCCESS}" -ne 1 ]; then
+                rm -f kernel "patched_kernel"
+              fi
+            popd >/dev/null
+            
+            if [ "${PATCH_SUCCESS}" -ne 1 ]; then
+              cp -f "$KERNEL_BACKUP" "$KERNEL_OUT_ABS"
+              rm -f "$KERNEL_BACKUP"
+              echo "::error:: Kernel patching failed; restored original kernel image."
+              exit 1
+            fi
+            
+            if [ -f "$KERNEL_OUT_ABS" ]; then
+              echo "[✓] Patched kernel written back to $KERNEL_OUT_ABS"
+            fi
+            rm -f "$KERNEL_BACKUP"
+            echo "::endgroup::"
               fi
             echo "::group:: Packaging Anykernel3 flasher"
             if [ ! -z ${{ inputs.anykernel3-url }} ]; then
