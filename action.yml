@@ -505,20 +505,21 @@ runs:
                   fi
                   
                   chmod +x ./kptools-linux
-                  KPT_TOOL="./$(basename "${KPT_TOOL_PATH}")"
-
+                  KPIMG_BIN="${PWD}/kpimg-linux"
+                  KPT_TOOL="${PWD}/kptools-linux"
+                  
                   echo "Fetching latest release for APatch_kpm..."
                   gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
                   mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
                   find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
-
+                  
                   REKERNEL_KEY="${{ inputs.rekernel-key }}"
-
+                  
                   Kernel_patching() {
                     local module_base="$1"
                     local module_file="${module_base}.kpm"
                     local output_name="patched_kernel"
-
+                  
                     if [ ! -f "${module_file}" ]; then
                       echo "::error:: ${module_file} not found for patching."
                       return 1
@@ -527,11 +528,11 @@ runs:
                       echo "::error:: Kernel file not found for patching."
                       return 1
                     fi
-
+                  
                     cp "${STAGING_KERNEL_ABS}" kernel
                     echo "[-] Patching kernel with ${module_file}"
-                    echo "\"${KPT_TOOL}\" -p -i kernel -k kpimg-linux -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
-                    "${KPT_TOOL}" -p -i kernel -k kpimg-linux -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
+                    echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
+                    "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
 
                     local is_rekernel
                     is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
