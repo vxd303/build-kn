@@ -502,87 +502,112 @@ runs:
               if [ ! -s ./kptools-linux ]; then
                 echo "::error:: Failed to copy kptools-linux from action repository."
                 exit 1
-              fi
-            
-              chmod +x ./kpimg-linux ./kptools-linux
-            
-              KPIMG_BIN="${PWD}/kpimg-linux"
-              KPT_TOOL="${PWD}/kptools-linux"
-            
-              echo "Fetching latest release for APatch_kpm..."
-              gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
-              mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
-              find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
-            
-              REKERNEL_KEY="${{ inputs.rekernel-key }}"
-            
-              Kernel_patching() {
-                local module_base="$1"
-                local module_file="${module_base}.kpm"
-                local output_name="patched_kernel"
-            
-                if [ ! -f "${module_file}" ]; then
-                  echo "::error:: ${module_file} not found for patching."
-                  return 1
-                fi
-                if [ ! -f "${KERNEL_OUT_ABS}" ]; then
-                  echo "::error:: Kernel file not found for patching."
-                  return 1
-                fi
-            
-                cp -f "${KERNEL_OUT_ABS}" kernel
-                if [ ! -s kernel ]; then
-                  echo "::error:: Failed to stage kernel file for patching (empty)."
-                  return 1
-                fi
-            
-                local original_sha staged_sha
-                original_sha=$(sha256sum "${KERNEL_OUT_ABS}" | awk '{print $1}')
-                staged_sha=$(sha256sum kernel | awk '{print $1}')
-                echo "[i] Original kernel path: ${KERNEL_OUT_ABS}"
-                echo "[i] Original kernel SHA256: ${original_sha}"
-                echo "[i] -i kernel SHA256: ${staged_sha}"
-                if [ "${original_sha}" != "${staged_sha}" ]; then
-                  echo "::warning:: Staged kernel SHA256 mismatch; please verify copy integrity."
-                fi
-            
-                echo "[-] Patching kernel with ${module_file}"
-                echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
-                "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
-            
-                local is_rekernel
-                is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
-            
-                if [ -e "${output_name}" ]; then
-                  echo "[✓] Kernel patched"
-                fi
-                if echo "${is_rekernel}" | grep -qE "re_kernel"; then
-                  echo "[✓] ${module_file} 已成功修补进你的内核！"
-                else
-                  echo "[x] ${module_file} 修补失败，脚本已退出"
-                  return 1
-                fi
-            
-                cp -f "${output_name}" "${KERNEL_OUT_ABS}"
-                rm -f kernel "${output_name}"
-                return 0
-              }
-            
-              PATCH_SUCCESS=1
-            
-              if ! Kernel_patching "Re-Kernel"; then
-                PATCH_SUCCESS=0
-              fi
-            
-              if [ "${{ inputs.rekernel-flavor }}" = "network" ] && [ "${PATCH_SUCCESS}" -eq 1 ]; then
-                if ! Kernel_patching "Re-Kernel_network"; then
-                  PATCH_SUCCESS=0
-                fi
-              fi
-            
-              if [ "${PATCH_SUCCESS}" -ne 1 ]; then
-                rm -f kernel "patched_kernel"
-              fi
+              fi        
+                  chmod +x ./kpimg-linux ./kptools-linux
+                  KPIMG_BIN="${PWD}/kpimg-linux"
+                  KPT_TOOL="${PWD}/kptools-linux"
+
+                  echo "Fetching latest release for APatch_kpm..."
+                  gh release download -R lzghzr/APatch_kpm --pattern "re_kernel*.kpm"
+                  mv re_kernel_*_network.kpm Re-Kernel_network.kpm 2>/dev/null || true
+                  find . -type f -name "re_kernel_*.kpm" -exec mv {} Re-Kernel.kpm \; 2>/dev/null || true
+
+                  REKERNEL_KEY="${{ inputs.rekernel-key }}"
+
+                  Kernel_patching() {
+                    local module_base="$1"
+                    local module_file="${module_base}.kpm"
+                    local output_name="patched_kernel"
+
+                    if [ ! -f "${module_file}" ]; then
+                      echo "::error:: ${module_file} not found for patching."
+                      return 1
+                    fi
+                    if [ ! -f "${KERNEL_OUT_ABS}" ]; then
+                      echo "::error:: Kernel file not found for patching."
+                      return 1
+                    fi
+
+                    local was_gzip=0
+                    echo "[i] Original kernel path: ${KERNEL_OUT_ABS}"
+                    local original_sha
+                    original_sha=$(sha256sum "${KERNEL_OUT_ABS}" | awk '{print $1}')
+                    echo "[i] Original kernel SHA256: ${original_sha}"
+
+                    if [[ "${KERNEL_OUT_ABS}" == *.gz ]]; then
+                      was_gzip=1
+                      echo "[i] Detected gzip-compressed kernel; decompressing for patching."
+                      if ! gzip -dc "${KERNEL_OUT_ABS}" > kernel; then
+                        echo "::error:: Failed to decompress ${KERNEL_OUT_ABS} for patching."
+                        return 1
+                      fi
+                    else
+                      cp -f "${KERNEL_OUT_ABS}" kernel
+                    fi
+
+                    if [ ! -s kernel ]; then
+                      echo "::error:: Failed to stage kernel file for patching (empty)."
+                      return 1
+                    fi
+
+                    local staged_sha
+                    staged_sha=$(sha256sum kernel | awk '{print $1}')
+                    echo "[i] -i kernel SHA256: ${staged_sha}"
+                    if [ "${original_sha}" != "${staged_sha}" ]; then
+                      if [ "${was_gzip}" -eq 1 ]; then
+                        echo "::notice:: Staged kernel hash differs from compressed input (expected after decompression)."
+                      else
+                        echo "::warning:: Staged kernel SHA256 mismatch; please verify copy integrity."
+                      fi
+                    elif [ "${was_gzip}" -eq 1 ]; then
+                      echo "::notice:: Staged kernel hash matches compressed input; verify decompression produced expected contents."
+                    fi
+
+                    echo "[-] Patching kernel with ${module_file}"
+                    echo "\"${KPT_TOOL}\" -p -i kernel -k \"${KPIMG_BIN}\" -M \"${module_file}\" -V pre-kernel-init -T kpm -s \"${REKERNEL_KEY}\" -o \"${output_name}\""
+                    "${KPT_TOOL}" -p -i kernel -k "${KPIMG_BIN}" -M "${module_file}" -V pre-kernel-init -T kpm -s "${REKERNEL_KEY}" -o "${output_name}"
+
+                    local is_rekernel
+                    is_rekernel=$("${KPT_TOOL}" -l -i "${output_name}" || true)
+
+                    if [ -e "${output_name}" ]; then
+                      echo "[✓] Kernel patched"
+                    fi
+                    if echo "${is_rekernel}" | grep -qE "re_kernel"; then
+                      echo "[✓] ${module_file} 已成功修补进你的内核！"
+                    else
+                      echo "[x] ${module_file} 修补失败，脚本已退出"
+                      return 1
+                    fi
+
+                    if [ "${was_gzip}" -eq 1 ]; then
+                      if ! gzip -n -c "${output_name}" > "${KERNEL_OUT_ABS}"; then
+                        echo "::error:: Failed to recompress patched kernel to ${KERNEL_OUT_ABS}."
+                        rm -f "${output_name}" kernel
+                        return 1
+                      fi
+                    else
+                      cp -f "${output_name}" "${KERNEL_OUT_ABS}"
+                    fi
+                    rm -f kernel "${output_name}"
+                    return 0
+                  }
+
+                  PATCH_SUCCESS=1
+
+                  if ! Kernel_patching "Re-Kernel"; then
+                    PATCH_SUCCESS=0
+                  fi
+
+                  if [ "${{ inputs.rekernel-flavor }}" = "network" ] && [ "${PATCH_SUCCESS}" -eq 1 ]; then
+                    if ! Kernel_patching "Re-Kernel_network"; then
+                      PATCH_SUCCESS=0
+                    fi
+                  fi
+
+                  if [ "${PATCH_SUCCESS}" -ne 1 ]; then
+                    rm -f kernel "patched_kernel"
+                  fi
             popd >/dev/null
             
             if [ "${PATCH_SUCCESS}" -ne 1 ]; then
