@@ -15,18 +15,9 @@ inputs:
   depth:
     required: false
     default: 1
-  vendor:
-    required: false
-    default: false
-  vendor-url:
-    description: 'Kernel Vendor Source Url'
-    required: false
   kernel-dir:
     required: false
     default: kernel
-  vendor-dir:
-    required: false
-    default: vendor
   kernel-branch:
     description: 'Branch name for kernel source'
     required: true
@@ -42,26 +33,11 @@ inputs:
     required: false
     default: ""
   ksu:
-    description: 'KernelSU function support'
-    required: false
-    default: false
-  ksu-version:
-    description: 'KernelSU default branch'
-    required: false
-    default: "main"
-  ksu-other:
-    required: false
-    default: false
-  ksu-url:
-    required: false
-  ksu-lkm:
+    description: 'KernelSU support'
     required: false
     default: false
   disable-lto:
-    description: 'Disable LTO configs'
-    required: false
-    default: false
-  nethunter:
+    description: 'Disable LTO'
     required: false
     default: false
   ccache:
@@ -79,13 +55,6 @@ inputs:
   anykernel3:
     required: false
     default: false
-  anykernel3-url:
-    required: false
-  bootimg-url:
-    required: false
-  release:
-    required: false
-    default: false
   access-token:
     required: false
   extra-cmd:
@@ -100,7 +69,6 @@ runs:
       with:
         key: ${{ inputs.config }}
         max-size: 4G
-        create-symlink: true
 
     - name: Build Kernel
       shell: bash
@@ -108,37 +76,46 @@ runs:
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-          echo "::group:: Installing Dependencies"
+          echo "::group:: Installing Dependencies & Python 2 Fix"
+          # Thêm kho lưu trữ cho Python 2 trên Ubuntu mới
           SU apt-get update
-          SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2 python3 xz-utils aria2 build-essential ccache pigz parallel
-          # Ép dùng Python 2 cho script DTC của Pixel 3a
-          [ -f /usr/bin/python2 ] && SU ln -sf /usr/bin/python2 /usr/bin/python
+          SU apt-get install -y software-properties-common
+          SU add-apt-repository -y ppa:deadsnakes/ppa
+          SU apt-get update
+          
+          SU apt-get install --no-install-recommends -y \
+            binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev \
+            libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates \
+            python2.7 python3 xz-utils aria2 build-essential ccache pigz parallel
+          
+          # Liên kết python2.7 thành python
+          SU ln -sf /usr/bin/python2.7 /usr/bin/python
+          python --version
           echo "::endgroup::"
 
           download_and_extract() {
-              local url=$1; local name=$2; local dir=$3; local br=${4:-main}
+              local url=$1; local name=$2; local dir=$3;
               mkdir -p "$dir"
-              case "$url" in
-                  *.zip) aria2c -o "${name}.zip" "$url"; unzip -q "${name}.zip" -d "$dir" ;;
-                  *.tar.*|*.gz|*.xz|*.bz2) aria2c -o "${name}.tar.gz" "$url"; tar -C "$dir" -xf "${name}.tar.gz" ;;
-                  *) git clone "$url" "$dir" --depth=${{ inputs.depth }} -b "$br" ;;
-              esac
+              aria2c -o "${name}.tar.gz" "$url"
+              tar -C "$dir" -xf "${name}.tar.gz"
           }
 
-          if [ ${{ inputs.aosp-clang }} = true ]; then
+          if [ "${{ inputs.aosp-clang }}" = "true" ]; then
               echo "::group:: Downloading Clang"
               AOSP_CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
               [ -z "${{ inputs.android-version }}" ] && AOSP_CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-${{ inputs.aosp-clang-version }}.tar.gz"
               download_and_extract "$AOSP_CLANG_URL" "clang" "$HOME/clang"
+              export PATH="$HOME/clang/bin:$PATH"
               echo "::endgroup::"
           fi
 
-          if [ ${{ inputs.aosp-gcc }} = true ]; then
+          if [ "${{ inputs.aosp-gcc }}" = "true" ]; then
               echo "::group:: Downloading GCC"
               G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
               G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
               download_and_extract "$G64" "gcc64" "$HOME/gcc-64"
               download_and_extract "$G32" "gcc32" "$HOME/gcc-32"
+              export PATH="$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
               echo "::endgroup::"
           fi
 
@@ -149,43 +126,31 @@ runs:
           cd kernel_src
           
           echo "::group:: Fixing Config Path"
-          # Tìm b1c1_defconfig bất kể nó nằm ở đâu trong arch/arm64/configs
+          # Tìm config bất kể vị trí (vendor hay gốc)
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
           if [ -z "$REAL_CONF" ]; then echo "❌ Config not found!"; exit 1; fi
           cp -f "$REAL_CONF" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-          echo "Using config: $REAL_CONF"
           echo "::endgroup::"
 
-          # Xử lý LTO nếu cần
-          if [ ${{ inputs.disable-lto }} = true ]; then
-              sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-              sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-              echo "CONFIG_LTO_NONE=y" >> "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-          fi
-
-          # Setup Compiler Paths
-          [ -d "$HOME/clang/bin" ] && export PATH="$HOME/clang/bin:$PATH"
-          [ -d "$HOME/gcc-64/bin" ] && export PATH="$HOME/gcc-64/bin:$PATH"
-          [ -d "$HOME/gcc-32/bin" ] && export PATH="$HOME/gcc-32/bin:$PATH"
-          
+          # Thiết lập Compiler
           CMD_CC="clang"; CMD_CROSS="aarch64-linux-android-"; CMD_CROSS32="arm-linux-androideabi-"
-          [ ${{ inputs.ccache }} = true ] && CMD_CC="ccache clang"
+          [ "${{ inputs.ccache }}" = "true" ] && CMD_CC="ccache clang"
 
           COMMON_ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$CMD_CROSS CROSS_COMPILE_ARM32=$CMD_CROSS32 CLANG_TRIPLE=aarch64-linux-gnu- CC=$CMD_CC"
 
           echo "::group:: Building Kernel"
           mkdir -p out
-          # BƯỚC 1: Cấu hình (TÁCH RIÊNG)
+          # Tách bước config
           make ${COMMON_ARGS} ${{ inputs.config }}
           
-          # BƯỚC 2: Build chính thức (Giới hạn j4 để tránh lỗi WLAN RAM)
+          # Build chính thức - Giới hạn j4 để tránh lỗi RAM cho driver Wi-Fi
           make -j4 ${COMMON_ARGS} all ${{ inputs.extra-cmd }} KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
-          # Đóng gói AnyKernel3
-          if [ ${{ inputs.anykernel3 }} = true ]; then
-              echo "::group:: Packaging"
-              git clone https://github.com/osm0sis/AnyKernel3
+          if [ "${{ inputs.anykernel3 }}" = "true" ]; then
+              echo "::group:: Packaging AnyKernel3"
+              git clone https://github.com/osm0sis/AnyKernel3 --depth=1
+              rm -rf AnyKernel3/.git
               cp out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
               [ -f out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
               cd AnyKernel3 && zip -r ../../build.zip ./*
@@ -193,7 +158,8 @@ runs:
           fi
 
     - name: Upload Result
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-${{ inputs.config }}
+        name: kernel-result
         path: build.zip
