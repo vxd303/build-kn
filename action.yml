@@ -248,7 +248,7 @@ runs:
          echo "::endgroup::"
 
          echo "::group:: Pulling Kernel Source"
-         git clone --recursive https://x-oauth-basic:${{ inputs.repo-token }}@github.com/vxd303/kernel_PixelExperience_exynos9810.git -b "${{ inputs.kernel-branch }}" --depth=${{ inputs.depth }} kernel/${{ inputs.kernel-dir }}
+         git clone --recursive https://x-oauth-basic:${{ inputs.repo-token }}@github.com/vxd303/kernel_google_msm-4.9.git -b "${{ inputs.kernel-branch }}" --depth=${{ inputs.depth }} kernel/${{ inputs.kernel-dir }}
          echo "::endgroup::"
 
          if [ "${{ inputs.vendor }}" = true ]; then
@@ -388,54 +388,65 @@ runs:
              echo "::endgroup::"
          fi
 
-         echo "::group:: Fixing Defconfig Path for Pixel"
-          cd $GITHUB_WORKSPACE/kernel/${{ inputs.kernel-dir }}
+         echo "::group:: Building Kernel with selected cross compiler"
+         mkdir out -p -v
+         COMMAND="make -j$(nproc --all) ${{ inputs.config }} ARCH=${{ inputs.arch }} all ${{ inputs.extra-cmd }} O=out"
 
-          # 1. Quét toàn bộ thư mục arch/arm64 để tìm file config bất kể nó nằm ở đâu
-          SEARCH_PATH=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" -type f | head -n 1)
+         if [ -d "$HOME/clang/bin" ]; then
+              CMD_PATH="$HOME/clang/bin"
+              CMD_CC="clang"
+              if [ -d "$HOME/gcc-64/bin" ] || [ -d "$HOME/gcc-32/bin" ]; then
+                  CMD_CROSS_COMPILE="$HOME/gcc-64/bin/${GCC64}-"
+                  CMD_CROSS_COMPILE_ARM32="$HOME/gcc-32/bin/${GCC32}-"
+                  CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
+              fi
+         elif [ -d "$HOME/gcc-64/bin" ] || [ -d "$HOME/gcc-32/bin" ]; then
+              CMD_PATH="$HOME/gcc-64/bin:$HOME/gcc-32/bin"
+              if [ -n "${GCC64}" ]; then
+                  CMD_CC="$HOME/gcc-64/bin/${GCC64}-gcc"
+              else
+                  CMD_CC="$HOME/gcc-32/bin/${GCC32}-gcc"
+              fi
+              CMD_CROSS_COMPILE="${GCC64}-"
+              CMD_CROSS_COMPILE_ARM32="${GCC32}-"
+              CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
+         else
+              CMD_CC="/usr/bin/clang"
+              CMD_CROSS_COMPILE="/usr/bin/aarch64-linux-gnu-"
+              CMD_CROSS_COMPILE_ARM32="arm-linux-gnuabeihf-"
+              CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
+         fi
 
-          if [ -z "$SEARCH_PATH" ]; then
-              echo "❌ KHÔNG TÌM THẤY FILE: ${{ inputs.config }}"
-              echo "Danh sách file khả dụng trong configs/:"
-              find arch/${{ inputs.arch }}/configs -maxdepth 2
-              exit 1
-          fi
+         if [ ${{ inputs.ccache }} = true ]; then
+              # enable ccache
+              export USE_CCACHE=1
+              export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
 
-          echo "Tìm thấy config tại: $SEARCH_PATH"
+              # ensure /usr/lib/ccache is first inside CMD_PATH
+              test -f /usr/bin/ccache && $SU rm -v /usr/bin/ccache
+              CMD_PATH="/usr/lib/ccache:${CMD_PATH}"
 
-          # 2. ĐƯA FILE VỀ VỊ TRÍ GỐC (Bắt buộc để lệnh sed/grep bên dưới không lỗi)
-          # Nếu nó nằm ở configs/google/bonito_defconfig -> copy về configs/bonito_defconfig
-          DEST_PATH="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-          if [ "$SEARCH_PATH" != "$DEST_PATH" ]; then
-              cp -fv "$SEARCH_PATH" "$DEST_PATH"
-          fi
+              # verify compiler exist in /usr/lib/ccache
+              if [ -d "${HOME}/clang/bin" ]; then
+                  [ ! -e /usr/lib/clang ] && \
+                      ln -s /usr/lib/clang /usr/bin/ccache
+              else
+                  if [ -n "${GCC64}" ]; then
+                      [ ! -e "/usr/lib/${GCC64}-gcc" ] && \
+                          ln -s "/usr/lib/${GCC64}-gcc" /usr/bin/ccache
+                  else
+                      [ ! -e "/usr/lib/${GCC32}-gcc" ] && \
+                          ln -s "/usr/lib/${GCC32}-gcc" /usr/bin/ccache
+                  fi
+              fi
+         fi
 
-          # 3. FIX LỖI KBUILD O=OUT (Tạo đường dẫn ảo nếu cần)
-          # Đôi khi Kbuild yêu cầu thư mục out phải có cấu trúc tương ứng
-          mkdir -p out/arch/${{ inputs.arch }}/configs
-          echo "::endgroup::"
+         # setup additional commands
+         COMMAND+=" PATH=${CMD_PATH}:${PATH} CROSS_COMPILE=${CMD_CROSS_COMPILE} CROSS_COMPILE_ARM32=${CMD_CROSS_COMPILE_ARM32} CLANG_TRIPLE=${CMD_CLANG_TRIPLE} CC=${CMD_CC}"
 
-          # --- Giữ nguyên các đoạn sed -i / grep của bạn ở đây ---
-          # (Các lệnh này giờ sẽ chạy ok vì file đã được copy về đúng DEST_PATH)
-
-          echo "::group:: Building Kernel"
-          # Thiết lập COMMON_ARGS
-          COMMON_ARGS="ARCH=${{ inputs.arch }} CROSS_COMPILE=${CMD_CROSS_COMPILE} CROSS_COMPILE_ARM32=${CMD_CROSS_COMPILE_ARM32} CLANG_TRIPLE=${CMD_CLANG_TRIPLE} CC=${CMD_CC}"
-
-          # BƯỚC QUAN TRỌNG NHẤT: Chạy config TRƯỚC khi chạy 'all'
-          # Sử dụng lệnh 'make' ở thư mục gốc, chỉ trỏ O=out
-          echo "Configuring..."
-          make O=out ${COMMON_ARGS} ${{ inputs.config }}
-
-          # Kiểm tra xem .config đã được tạo ra trong out chưa
-          if [ ! -f out/.config ]; then
-              echo "❌ Lỗi: .config chưa được tạo trong thư mục out!"
-              exit 1
-          fi
-
-          echo "Building..."
-          make -j$(nproc --all) O=out ${COMMON_ARGS} all ${{ inputs.extra-cmd }}
-          echo "::endgroup::"
+         # run the command
+         ${COMMAND}
+         echo "::endgroup::"
 
          unset CMD_PATH CMD_CC CMD_CLANG_TRIPLE CMD_CROSS_COMPILE CMD_CROSS_COMPILE_ARM32 USE_CCACHE CLANG_TRIPLE CROSS_COMPILE_ARM32 CROSS_COMPILE CLANG_PATH HOMES KVER COMMAND SWAP_FILE SUBLEVEL PATCHLEVEL VERSION GCC_DIR FILE FILE_NAME MATCHED_DIR FOLDER FOLDER_NAME GCC64 GCC32 NEED_GCC AOSP_CLANG_URL OTHER_CLANG_URL AOSP_GCC64_URL AOSP_GCC32_URL AOSP_GCC_BRANCH OTHER_GCC64_URL OTHER_GCC32_URL
 
