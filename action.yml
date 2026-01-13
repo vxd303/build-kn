@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Stable Build for Pixel 3a - Anti Broken Pipe"
+description: "Final Stable Build - Clean Environment Fix"
 
 branding:
   icon: 'activity'
@@ -7,16 +7,12 @@ branding:
 
 inputs:
   kernel-url:
-    description: 'Kernel Source Url'
     required: true
   repo-token:
-    description: 'Token'
     required: false
   kernel-branch:
-    description: 'Branch'
     required: true
   config:
-    description: 'defconfig'
     required: true
   arch:
     default: arm64
@@ -36,14 +32,13 @@ runs:
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
           
-          # GIẢI PHÁP MẠNH 1: Dọn dẹp tuyệt đối để lấy RAM/Disk
-          echo "::group:: Deep Cleaning"
+          echo "::group:: Cleaning Runner"
+          # Gỡ Homebrew triệt để - Đây là nguyên nhân hay gây lỗi PATH
           aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
           NONINTERACTIVE=1 bash ./uninstall.sh -f -q
-          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/local/share/chromium
+          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           echo "::endgroup::"
 
-          # GIẢI PHÁP MẠNH 2: 16GB SWAP (Phải có để không Broken pipe)
           echo "::group:: Setting Up 16GB Swap"
           if [ -f /bin/swapon ]; then
               export SWAP_FILE=$(swapon --show=NAME | tail -n 1)
@@ -55,8 +50,8 @@ runs:
           fi
           echo "::endgroup::"
 
-          # GIẢI PHÁP MẠNH 3: Python 2.7 & Deps
-          echo "::group:: Installing Python 2.7"
+          echo "::group:: Installing Dependencies"
+          # Cài Python 2.7 từ kho Bullseye (chuẩn cho Kernel đời cũ)
           echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
           SU apt-get update
           SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
@@ -69,63 +64,52 @@ runs:
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-          # Tải Toolchain
+          # 1. Tải Toolchains
           download_toolchain() {
               local url=$1; local name=$2; local dir=$3;
               mkdir -p "$dir"
-              aria2c -x 16 -s 16 -k 1M -o "${name}.tar.gz" "$url"
+              aria2c -x 16 -s 16 -o "${name}.tar.gz" "$url"
               tar -C "$dir" -zxf "${name}.tar.gz"
               rm -f "${name}.tar.gz"
           }
 
-          echo "::group:: Downloading Toolchains"
-          # Tải Clang
-          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
-          download_toolchain "$CLANG_URL" "clang" "$HOME/clang"
-          
-          # Tải GCC AOSP (Bắt buộc cho Pixel 3a)
-          G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
-          G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
-          download_toolchain "$G64" "gcc64" "$HOME/gcc-64"
-          download_toolchain "$G32" "gcc32" "$HOME/gcc-32"
-          
-          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
-          echo "::endgroup::"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc64" "$HOME/gcc-64"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc32" "$HOME/gcc-32"
 
-          # Clone Source
-          echo "::group:: Cloning Source"
+          # 2. Clone Source
           KURL="${{ inputs.kernel-url }}"
           [ ! -z "${{ inputs.repo-token }}" ] && KURL=$(echo $KURL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
           git clone "$KURL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
-          echo "::endgroup::"
-
+          
           cd kernel_src
-
-          # Fix Config Path & CP Same File
-          echo "::group:: Fixing Config"
+          
+          # 3. Fix Config Path
           DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
-          if [ -z "$REAL_CONF" ]; then echo "❌ Config not found!"; exit 1; fi
           [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
-          echo "::endgroup::"
 
-          # GIẢI PHÁP MẠNH 4: BIÊN DỊCH AN TOÀN TUYỆT ĐỐI
-          echo "::group:: Compiling"
+          # 4. LỆNH BUILD "RESET" - Giống hệt mã thành công của bạn
+          # Không dùng biến ARGS trung gian để tránh lỗi giải phóng chuỗi PATH
           mkdir -p out
-          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
           
-          # Bước 1: Tạo Config
-          make $ARGS ${{ inputs.config }}
+          echo "::group:: Compiling"
+          # Ép PATH cực sạch, chỉ chứa Toolchain và System
+          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
           
-          # Bước 2: Biên dịch chính - GIỚI HẠN -j3 (3 luồng là mức 'vàng' cho 7GB RAM + 16GB Swap)
-          # Thêm các cờ chống lỗi IO và tràn RAM
-          make -j3 $ARGS all \
-               KCFLAGS="-Wno-error -Wno-implicit-function-declaration" \
+          # Dùng cách gộp config + all nhưng giới hạn j4
+          make -j4 O=out ARCH=${{ inputs.arch }} \
+               CROSS_COMPILE=aarch64-linux-android- \
+               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
+               CC=clang \
+               LD=ld.lld \
+               KCFLAGS="-Wno-error" \
                HOSTCFLAGS="-Wno-error" \
-               LLVM=1 LLVM_IAS=1
+               ${{ inputs.config }} all
           echo "::endgroup::"
 
-          # Packaging
+          # 5. Packaging AnyKernel3
           if [ "${{ inputs.anykernel3 }}" = "true" ]; then
               cd ..
               git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
@@ -137,5 +121,5 @@ runs:
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-${{ inputs.config }}
+        name: kernel-result
         path: build.zip
