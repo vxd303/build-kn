@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "A action to built android kernel."
+description: "Final Optimized Action with CP Fix and Auth Support"
 
 branding:
   icon: 'activity'
@@ -10,144 +10,45 @@ inputs:
     description: 'Kernel Source Url'
     required: true
   repo-token:
-    description: 'Token'
+    description: 'GitHub PAT Token'
     required: false
-  depth:
-    required: false
-    default: 1
-  vendor:
-    required: false
-    default: false
-  vendor-url:
-    description: 'Kernel Vendor Source Url'
-    required: false
-  kernel-dir:
-    required: false
-    default: kernel
-  vendor-dir:
-    required: false
-    default: vendor
   kernel-branch:
-    description: 'Branch name for kernel source'
-    required: false
-  vendor-branch:
-    description: 'Branch name for vendor kernel source'
-    required: false
+    description: 'Branch name'
+    required: true
   config:
-    description: 'configuration for building android kernel'
+    description: 'configuration'
     required: true
-    default: defconfig
   arch:
-    required: true
     default: arm64
-  android-version:
-    description: 'Android version.'
-    required: false
-    default: ""
-  ksu:
-    description: 'KernelSU function support'
-    required: false
-    default: false
-  rekernel:
-    required: false
-    default: false
-  ksu-version:
-    description: 'KernelSU default branch'
-    required: false
-    default: "main"
-  ksu-other:
-    description: 'Using third party kernelsu'
-    required: false
-    default: false
-  ksu-url:
-    required: false
-  ksu-lkm:
-    required: false
-    default: false
-  disable-lto:
-    description: 'Disable LTO configs'
-    required: false
-    default: false
-  lxc:
-    required: false
-    default: false
-  lxc-patch:
-    required: false
-    default: false
-  nethunter:
-    required: false
-    default: false
-  nethunter-patch:
-    required: false
-    default: false
-  kvm:
-    required: false
-    default: false
-  ccache:
-    required: false
-    default: false
   aosp-gcc:
-    required: false
-    default: false
-  other-gcc32-url:
-    required: false
-  other-gcc32-branch:
-    required: false
-  other-gcc64-url:
-    required: false
-  other-gcc64-branch:
-    required: false
+    default: true
   aosp-clang:
-    required: false
-    default: false
+    default: true
   aosp-clang-version:
-    required: false
     default: "r383902"
-  other-clang-url:
-    required: false
-  other-clang-branch:
-    required: false
-    default: main
+  android-version:
+    default: "11"
   anykernel3:
-    required: false
-    default: false
-  anykernel3-url:
-    required: false
-  bootimg-url:
-    required: false
-  release:
-    required: false
-    default: false
-  access-token:
-    required: false
+    default: true
   extra-cmd:
-    required: false
     default: "LLVM=1 LLVM_IAS=1"
 
 runs:
   using: 'composite'
   steps:
-    - name: Setup ccache
-      if: inputs.ccache == 'true'
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        key: ${{ inputs.config }}
-        max-size: 4G
-
-    - name: Build Kernel
+    - name: Cleanup & Setup environment
       shell: bash
       run: |
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-          # TINH TÚY 1: DỌN DẸP HOMEBREW & GIẢI PHÓNG DISK/RAM (Copy từ mã thành công)
-          echo "::group:: Cleaning Environment"
+          echo "::group:: Cleaning Environment & Homebrew"
+          # Gỡ Homebrew để giải phóng dung lượng và RAM cho LLVM
           aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
           NONINTERACTIVE=1 bash ./uninstall.sh -f -q
           SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           echo "::endgroup::"
 
-          # TINH TÚY 2: SET SWAP 16G CHUẨN (Quan trọng để tránh Broken pipe)
           echo "::group:: Setting Up 16GB Swap"
           if [ -f /bin/swapon ]; then
               export SWAP_FILE=$(swapon --show=NAME | tail -n 1)
@@ -159,71 +60,87 @@ runs:
           fi
           echo "::endgroup::"
 
-          # TINH TÚY 3: CÀI PYTHON 2.7 TỪ DEBIAN BULLSEYE (Pixel 3a cần DTC cũ)
-          echo "::group:: Installing Dependencies"
+          echo "::group:: Installing Python 2.7 & Dependencies"
           echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
           SU apt-get update
           SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache pigz parallel
           SU ln -sf /usr/bin/python2.7 /usr/bin/python
           echo "::endgroup::"
 
-          # (Giữ nguyên logic download_and_extract của bạn)
-          download_and_extract() {
-              local url=$1; local name=$2; local dir=$3; local br=${4:-main}
-              mkdir -p -v "$dir"
-              case "$url" in
-                  *.zip) aria2c -o "${name}.zip" "$url"; unzip -q "${name}.zip" -d "$dir" ;;
-                  *.tar.*|*.gz|*.xz|*.bz2) aria2c -o "${name}.${url##*.}" "$url"; tar -C "$dir" -xf "${name}.${url##*.}" ;;
-                  *) git clone "$url" "$dir" --depth=${{ inputs.depth }} -b "$br" ;;
-              esac
+    - name: Build Kernel
+      shell: bash
+      run: |
+          set -e
+          SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
+
+          # Tải Toolchain
+          download_toolchain() {
+              local url=$1; local name=$2; local dir=$3;
+              mkdir -p "$dir"
+              aria2c -x 16 -s 16 -k 1M -o "${name}.tar.gz" "$url"
+              tar -C "$dir" -zxf "${name}.tar.gz"
+              rm -f "${name}.tar.gz"
           }
 
-          # (Logic Toolchain giữ nguyên nhưng sửa URL GCC/Clang cho chuẩn AOSP)
-          if [ ${{ inputs.aosp-clang }} = true ]; then
-              URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
-              [ -z "${{ inputs.android-version }}" ] && URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-${{ inputs.aosp-clang-version }}.tar.gz"
-              download_and_extract "$URL" "clang" "$HOME/clang"
+          if [ "${{ inputs.aosp-clang }}" = "true" ]; then
+              CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
+              download_toolchain "$CLANG_URL" "clang" "$HOME/clang"
+              export PATH="$HOME/clang/bin:$PATH"
           fi
 
-          if [ ${{ inputs.aosp-gcc }} = true ]; then
-              G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz"
-              G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz"
-              download_and_extract "$G64" "gcc64" "$HOME/gcc-64"
-              download_and_extract "$G32" "gcc32" "$HOME/gcc-32"
+          if [ "${{ inputs.aosp-gcc }}" = "true" ]; then
+              G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
+              G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
+              download_toolchain "$G64" "gcc64" "$HOME/gcc-64"
+              download_toolchain "$G32" "gcc32" "$HOME/gcc-32"
+              export PATH="$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
           fi
 
-          # CLONE SOURCE (Dùng repo-token bảo mật)
-          git clone --recursive https://x-oauth-basic:${{ inputs.repo-token }}@$(echo ${{ inputs.kernel-url }} | sed 's|https://||') -b "${{ inputs.kernel-branch }}" --depth=${{ inputs.depth }} kernel_src
-          cd kernel_src
-
-          # FIX CONFIG PATH
-          REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
-          [ ! -z "$REAL_CONF" ] && cp -f "$REAL_CONF" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-
-          # TINH TÚY 4: LỆNH BUILD AN TOÀN (Gộp config và all nhưng truyền Toolchain trực tiếp)
-          echo "::group:: Building Kernel"
-          mkdir -p out
-          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
-          
-          # Giới hạn -j4 để ổn định I/O
-          make -j4 O=out ARCH=${{ inputs.arch }} \
-               CROSS_COMPILE=aarch64-linux-android- \
-               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-               CLANG_TRIPLE=aarch64-linux-gnu- \
-               CC="clang" ${{ inputs.extra-cmd }} \
-               ${{ inputs.config }} all \
-               KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          # Clone Source với Auth
+          echo "::group:: Cloning Source"
+          KERNEL_URL="${{ inputs.kernel-url }}"
+          [ ! -z "${{ inputs.repo-token }}" ] && KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
+          git clone "$KERNEL_URL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
           echo "::endgroup::"
 
-          # (Giữ nguyên logic AnyKernel3/Bootimg của mã cũ)
-          if [ ${{ inputs.anykernel3 }} = true ]; then
+          cd kernel_src
+
+          # FIX LỖI CP: Kiểm tra vị trí file config
+          echo "::group:: Fixing Config Path"
+          DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
+          REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
+          
+          if [ -z "$REAL_CONF" ]; then
+              echo "❌ Config ${{ inputs.config }} not found!" && exit 1
+          fi
+
+          if [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ]; then
+              echo "Copying config from $REAL_CONF to $DEST_CONF"
+              cp -f "$REAL_CONF" "$DEST_CONF"
+          else
+              echo "Config is already in place, skipping copy."
+          fi
+          echo "::endgroup::"
+
+          # Build j4
+          echo "::group:: Compiling Kernel"
+          mkdir -p out
+          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+          
+          make $ARGS ${{ inputs.config }}
+          make -j4 $ARGS all ${{ inputs.extra-cmd }} KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          echo "::endgroup::"
+
+          # Packaging
+          if [ "${{ inputs.anykernel3 }}" = "true" ]; then
               cd ..
-              git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
+              git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
               cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
+              [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
               cd AnyKernel3 && zip -r ../build.zip ./*
           fi
 
-    - id: upload
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: kernel-${{ inputs.config }}
