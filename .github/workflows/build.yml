@@ -14,13 +14,13 @@ jobs:
         uses: vxd303/build-kn@main
         with:
           # Thay đổi URL chỉ còn đường dẫn repo
-          kernel-url: https://github.com/vxd303/kernel_PixelExperience_exynos9810
+          kernel-url: https://github.com/vxd303/kernel_google_msm-4.9
           # Thêm tham số repo-token để xác thực
           repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           pass-zip: ${{ secrets.PASSZIP }}
           kernel-dir: msm-4.19
-          kernel-branch: twelve-test-2
-          config: exynos9810-starlte_defconfig
+          kernel-branch: twelve
+          config: bonito_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
