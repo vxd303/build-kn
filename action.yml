@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Optimized Action with Auth Fix"
+description: "Final Optimized Action with CP Fix"
 
 branding:
   icon: 'activity'
@@ -10,7 +10,7 @@ inputs:
     description: 'Kernel Source Url'
     required: true
   repo-token:
-    description: 'GitHub PAT Token for private repos'
+    description: 'GitHub PAT Token'
     required: false
   kernel-branch:
     description: 'Branch name'
@@ -63,7 +63,7 @@ runs:
           SU ln -sf /usr/bin/python2.7 /usr/bin/python
           echo "::endgroup::"
 
-          # 3. Tải Clang & GCC
+          # 3. Tải Toolchains
           download_toolchain() {
               local url=$1; local name=$2; local dir=$3;
               mkdir -p "$dir"
@@ -91,11 +91,10 @@ runs:
               echo "::endgroup::"
           fi
 
-          # 4. FIX AUTH: Clone Source với Token nếu có
+          # 4. Clone Source
           echo "::group:: Cloning Kernel Source"
           KERNEL_URL="${{ inputs.kernel-url }}"
           if [ ! -z "${{ inputs.repo-token }}" ]; then
-              # Chèn token vào URL (giả định URL bắt đầu bằng https://github.com/...)
               KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
           fi
           git clone "$KERNEL_URL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
@@ -104,8 +103,21 @@ runs:
 
           # 5. Build
           echo "::group:: Building"
+          # SỬA LỖI CP TẠI ĐÂY: Chỉ copy nếu đường dẫn khác nhau
+          DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
-          cp -f "$REAL_CONF" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
+          
+          if [ -z "$REAL_CONF" ]; then
+              echo "❌ Config ${{ inputs.config }} not found!"
+              exit 1
+          fi
+
+          if [ "$REAL_CONF" != "$DEST_CONF" ]; then
+              echo "Copying config from $REAL_CONF to $DEST_CONF"
+              cp -f "$REAL_CONF" "$DEST_CONF"
+          else
+              echo "Config is already in the correct location."
+          fi
 
           mkdir -p out
           ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
@@ -116,10 +128,13 @@ runs:
 
           # 6. Packaging
           if [ "${{ inputs.anykernel3 }}" = "true" ]; then
+              echo "::group:: Packaging"
+              cd ..
               git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
-              cp out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
-              [ -f out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
-              cd AnyKernel3 && zip -r ../../build.zip ./*
+              cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
+              [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
+              cd AnyKernel3 && zip -r ../build.zip ./*
+              echo "::endgroup::"
           fi
 
     - name: Upload
