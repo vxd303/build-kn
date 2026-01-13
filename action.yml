@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Optimized Action for Pixel 3a"
+description: "Final Optimized Action with Auth Fix"
 
 branding:
   icon: 'activity'
@@ -10,7 +10,7 @@ inputs:
     description: 'Kernel Source Url'
     required: true
   repo-token:
-    description: 'Token'
+    description: 'GitHub PAT Token for private repos'
     required: false
   kernel-branch:
     description: 'Branch name'
@@ -49,13 +49,13 @@ runs:
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-          # 1. Setup 8GB Swap (vừa đủ cho Pixel 3a, tránh tốn ổ đĩa)
+          # 1. Setup 8GB Swap
           SU fallocate -l 8G /swapfile
           SU chmod 600 /swapfile
           SU mkswap /swapfile
           SU swapon /swapfile
 
-          # 2. Cài đặt Python 2.7 (Chuẩn Debian cho DTC)
+          # 2. Cài đặt Python 2.7 & Dependencies
           echo "::group:: Installing Dependencies"
           echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
           SU apt-get update
@@ -63,11 +63,10 @@ runs:
           SU ln -sf /usr/bin/python2.7 /usr/bin/python
           echo "::endgroup::"
 
-          # 3. Tải Clang & GCC (Fix URL 400)
+          # 3. Tải Clang & GCC
           download_toolchain() {
               local url=$1; local name=$2; local dir=$3;
               mkdir -p "$dir"
-              echo "Downloading $name..."
               aria2c -x 16 -s 16 -k 1M -o "${name}.tar.gz" "$url"
               tar -C "$dir" -zxf "${name}.tar.gz"
               rm -f "${name}.tar.gz"
@@ -75,7 +74,6 @@ runs:
 
           if [ "${{ inputs.aosp-clang }}" = "true" ]; then
               echo "::group:: Downloading Clang"
-              # URL Clang đã sửa lại cho đúng định dạng Google Source
               CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
               [ -z "${{ inputs.android-version }}" ] && CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ inputs.aosp-clang-version }}.tar.gz"
               download_toolchain "$CLANG_URL" "clang" "$HOME/clang"
@@ -93,30 +91,35 @@ runs:
               echo "::endgroup::"
           fi
 
-          # 4. Clone Source & Build
-          echo "::group:: Cloning and Building"
-          git clone ${{ inputs.kernel-url }} -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
+          # 4. FIX AUTH: Clone Source với Token nếu có
+          echo "::group:: Cloning Kernel Source"
+          KERNEL_URL="${{ inputs.kernel-url }}"
+          if [ ! -z "${{ inputs.repo-token }}" ]; then
+              # Chèn token vào URL (giả định URL bắt đầu bằng https://github.com/...)
+              KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
+          fi
+          git clone "$KERNEL_URL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
           cd kernel_src
-          
-          # Tự động khớp Config
+          echo "::endgroup::"
+
+          # 5. Build
+          echo "::group:: Building"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
           cp -f "$REAL_CONF" "arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
 
           mkdir -p out
-          # Tách lệnh build: config trước, build sau
-          make O=out ARCH=${{ inputs.arch }} CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang ${{ inputs.config }}
+          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
           
-          make -j4 O=out ARCH=${{ inputs.arch }} CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          make $ARGS ${{ inputs.config }}
+          make -j4 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
-          # 5. AnyKernel3
+          # 6. Packaging
           if [ "${{ inputs.anykernel3 }}" = "true" ]; then
-              echo "::group:: Packaging"
               git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
               cp out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
               [ -f out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
               cd AnyKernel3 && zip -r ../../build.zip ./*
-              echo "::endgroup::"
           fi
 
     - name: Upload
