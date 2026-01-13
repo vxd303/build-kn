@@ -389,10 +389,10 @@ runs:
          fi
 
          echo "::group:: Building Kernel with selected cross compiler"
-          mkdir out -p -v
+         mkdir out -p -v
+         COMMAND="make -j$(nproc --all) ${{ inputs.config }} ARCH=${{ inputs.arch }} all ${{ inputs.extra-cmd }} O=out"
 
-          # 1. Thiết lập các biến môi trường cho Compiler
-          if [ -d "$HOME/clang/bin" ]; then
+         if [ -d "$HOME/clang/bin" ]; then
               CMD_PATH="$HOME/clang/bin"
               CMD_CC="clang"
               if [ -d "$HOME/gcc-64/bin" ] || [ -d "$HOME/gcc-32/bin" ]; then
@@ -400,7 +400,7 @@ runs:
                   CMD_CROSS_COMPILE_ARM32="$HOME/gcc-32/bin/${GCC32}-"
                   CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
               fi
-          elif [ -d "$HOME/gcc-64/bin" ] || [ -d "$HOME/gcc-32/bin" ]; then
+         elif [ -d "$HOME/gcc-64/bin" ] || [ -d "$HOME/gcc-32/bin" ]; then
               CMD_PATH="$HOME/gcc-64/bin:$HOME/gcc-32/bin"
               if [ -n "${GCC64}" ]; then
                   CMD_CC="$HOME/gcc-64/bin/${GCC64}-gcc"
@@ -410,30 +410,43 @@ runs:
               CMD_CROSS_COMPILE="${GCC64}-"
               CMD_CROSS_COMPILE_ARM32="${GCC32}-"
               CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
-          else
+         else
               CMD_CC="/usr/bin/clang"
               CMD_CROSS_COMPILE="/usr/bin/aarch64-linux-gnu-"
               CMD_CROSS_COMPILE_ARM32="arm-linux-gnuabeihf-"
               CMD_CLANG_TRIPLE="aarch64-linux-gnu-"
-          fi
+         fi
 
-          if [ ${{ inputs.ccache }} = true ]; then
+         if [ ${{ inputs.ccache }} = true ]; then
+              # enable ccache
               export USE_CCACHE=1
+              export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+
+              # ensure /usr/lib/ccache is first inside CMD_PATH
+              test -f /usr/bin/ccache && $SU rm -v /usr/bin/ccache
               CMD_PATH="/usr/lib/ccache:${CMD_PATH}"
-          fi
 
-          # 2. XÁC ĐỊNH COMMON ARGS (Tránh lặp lại code)
-          COMMON_ARGS="ARCH=${{ inputs.arch }} O=out PATH=${CMD_PATH}:${PATH} CROSS_COMPILE=${CMD_CROSS_COMPILE} CROSS_COMPILE_ARM32=${CMD_CROSS_COMPILE_ARM32} CLANG_TRIPLE=${CMD_CLANG_TRIPLE} CC=${CMD_CC}"
+              # verify compiler exist in /usr/lib/ccache
+              if [ -d "${HOME}/clang/bin" ]; then
+                  [ ! -e /usr/lib/clang ] && \
+                      ln -s /usr/lib/clang /usr/bin/ccache
+              else
+                  if [ -n "${GCC64}" ]; then
+                      [ ! -e "/usr/lib/${GCC64}-gcc" ] && \
+                          ln -s "/usr/lib/${GCC64}-gcc" /usr/bin/ccache
+                  else
+                      [ ! -e "/usr/lib/${GCC32}-gcc" ] && \
+                          ln -s "/usr/lib/${GCC32}-gcc" /usr/bin/ccache
+                  fi
+              fi
+         fi
 
-          # 3. BƯỚC QUAN TRỌNG: Tách defconfig và build (Fix lỗi Pixel 3a)
-          echo "Configuring kernel with ${{ inputs.config }}..."
-          make ${COMMON_ARGS} ${{ inputs.config }}
+         # setup additional commands
+         COMMAND+=" PATH=${CMD_PATH}:${PATH} CROSS_COMPILE=${CMD_CROSS_COMPILE} CROSS_COMPILE_ARM32=${CMD_CROSS_COMPILE_ARM32} CLANG_TRIPLE=${CMD_CLANG_TRIPLE} CC=${CMD_CC}"
 
-          echo "Starting kernel build..."
-          # Chạy lệnh build chính (all)
-          make -j$(nproc --all) ${COMMON_ARGS} all ${{ inputs.extra-cmd }}
-          
-          echo "::endgroup::"
+         # run the command
+         ${COMMAND}
+         echo "::endgroup::"
 
          unset CMD_PATH CMD_CC CMD_CLANG_TRIPLE CMD_CROSS_COMPILE CMD_CROSS_COMPILE_ARM32 USE_CCACHE CLANG_TRIPLE CROSS_COMPILE_ARM32 CROSS_COMPILE CLANG_PATH HOMES KVER COMMAND SWAP_FILE SUBLEVEL PATCHLEVEL VERSION GCC_DIR FILE FILE_NAME MATCHED_DIR FOLDER FOLDER_NAME GCC64 GCC32 NEED_GCC AOSP_CLANG_URL OTHER_CLANG_URL AOSP_GCC64_URL AOSP_GCC32_URL AOSP_GCC_BRANCH OTHER_GCC64_URL OTHER_GCC32_URL
 
