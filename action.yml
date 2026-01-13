@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Optimized Action with CP Fix and Auth Support"
+description: "Final Stable Build for Pixel 3a - Anti Broken Pipe"
 
 branding:
   icon: 'activity'
@@ -10,28 +10,22 @@ inputs:
     description: 'Kernel Source Url'
     required: true
   repo-token:
-    description: 'GitHub PAT Token'
+    description: 'Token'
     required: false
   kernel-branch:
-    description: 'Branch name'
+    description: 'Branch'
     required: true
   config:
-    description: 'configuration'
+    description: 'defconfig'
     required: true
   arch:
     default: arm64
-  aosp-gcc:
-    default: true
-  aosp-clang:
-    default: true
   aosp-clang-version:
     default: "r383902"
   android-version:
     default: "11"
   anykernel3:
     default: true
-  extra-cmd:
-    default: "LLVM=1 LLVM_IAS=1"
 
 runs:
   using: 'composite'
@@ -41,14 +35,15 @@ runs:
       run: |
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
-
-          echo "::group:: Cleaning Environment & Homebrew"
-          # Gỡ Homebrew để giải phóng dung lượng và RAM cho LLVM
+          
+          # GIẢI PHÁP MẠNH 1: Dọn dẹp tuyệt đối để lấy RAM/Disk
+          echo "::group:: Deep Cleaning"
           aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
           NONINTERACTIVE=1 bash ./uninstall.sh -f -q
-          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/local/share/chromium
           echo "::endgroup::"
 
+          # GIẢI PHÁP MẠNH 2: 16GB SWAP (Phải có để không Broken pipe)
           echo "::group:: Setting Up 16GB Swap"
           if [ -f /bin/swapon ]; then
               export SWAP_FILE=$(swapon --show=NAME | tail -n 1)
@@ -60,10 +55,11 @@ runs:
           fi
           echo "::endgroup::"
 
-          echo "::group:: Installing Python 2.7 & Dependencies"
+          # GIẢI PHÁP MẠNH 3: Python 2.7 & Deps
+          echo "::group:: Installing Python 2.7"
           echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
           SU apt-get update
-          SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache pigz parallel
+          SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
           SU ln -sf /usr/bin/python2.7 /usr/bin/python
           echo "::endgroup::"
 
@@ -82,53 +78,51 @@ runs:
               rm -f "${name}.tar.gz"
           }
 
-          if [ "${{ inputs.aosp-clang }}" = "true" ]; then
-              CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
-              download_toolchain "$CLANG_URL" "clang" "$HOME/clang"
-              export PATH="$HOME/clang/bin:$PATH"
-          fi
+          echo "::group:: Downloading Toolchains"
+          # Tải Clang
+          CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz"
+          download_toolchain "$CLANG_URL" "clang" "$HOME/clang"
+          
+          # Tải GCC AOSP (Bắt buộc cho Pixel 3a)
+          G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
+          G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
+          download_toolchain "$G64" "gcc64" "$HOME/gcc-64"
+          download_toolchain "$G32" "gcc32" "$HOME/gcc-32"
+          
+          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
+          echo "::endgroup::"
 
-          if [ "${{ inputs.aosp-gcc }}" = "true" ]; then
-              G64="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
-              G32="https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz"
-              download_toolchain "$G64" "gcc64" "$HOME/gcc-64"
-              download_toolchain "$G32" "gcc32" "$HOME/gcc-32"
-              export PATH="$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
-          fi
-
-          # Clone Source với Auth
+          # Clone Source
           echo "::group:: Cloning Source"
-          KERNEL_URL="${{ inputs.kernel-url }}"
-          [ ! -z "${{ inputs.repo-token }}" ] && KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
-          git clone "$KERNEL_URL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
+          KURL="${{ inputs.kernel-url }}"
+          [ ! -z "${{ inputs.repo-token }}" ] && KURL=$(echo $KURL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
+          git clone "$KURL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
           echo "::endgroup::"
 
           cd kernel_src
 
-          # FIX LỖI CP: Kiểm tra vị trí file config
-          echo "::group:: Fixing Config Path"
+          # Fix Config Path & CP Same File
+          echo "::group:: Fixing Config"
           DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
-          
-          if [ -z "$REAL_CONF" ]; then
-              echo "❌ Config ${{ inputs.config }} not found!" && exit 1
-          fi
-
-          if [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ]; then
-              echo "Copying config from $REAL_CONF to $DEST_CONF"
-              cp -f "$REAL_CONF" "$DEST_CONF"
-          else
-              echo "Config is already in place, skipping copy."
-          fi
+          if [ -z "$REAL_CONF" ]; then echo "❌ Config not found!"; exit 1; fi
+          [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
           echo "::endgroup::"
 
-          # Build j4
-          echo "::group:: Compiling Kernel"
+          # GIẢI PHÁP MẠNH 4: BIÊN DỊCH AN TOÀN TUYỆT ĐỐI
+          echo "::group:: Compiling"
           mkdir -p out
           ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
           
+          # Bước 1: Tạo Config
           make $ARGS ${{ inputs.config }}
-          make -j4 $ARGS all ${{ inputs.extra-cmd }} KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          
+          # Bước 2: Biên dịch chính - GIỚI HẠN -j3 (3 luồng là mức 'vàng' cho 7GB RAM + 16GB Swap)
+          # Thêm các cờ chống lỗi IO và tràn RAM
+          make -j3 $ARGS all \
+               KCFLAGS="-Wno-error -Wno-implicit-function-declaration" \
+               HOSTCFLAGS="-Wno-error" \
+               LLVM=1 LLVM_IAS=1
           echo "::endgroup::"
 
           # Packaging
