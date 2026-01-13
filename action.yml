@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Optimized Action with CP Fix"
+description: "Final Stable Build for Pixel 3a"
 
 branding:
   icon: 'activity'
@@ -49,11 +49,13 @@ runs:
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-          # 1. Setup 8GB Swap
-          SU fallocate -l 8G /swapfile
+          # 1. Setup 12GB Swap (Mức an toàn nhất để tránh Broken pipe)
+          echo "::group:: Setting Up 12GB Swap"
+          SU fallocate -l 12G /swapfile
           SU chmod 600 /swapfile
           SU mkswap /swapfile
           SU swapon /swapfile
+          echo "::endgroup::"
 
           # 2. Cài đặt Python 2.7 & Dependencies
           echo "::group:: Installing Dependencies"
@@ -94,36 +96,23 @@ runs:
           # 4. Clone Source
           echo "::group:: Cloning Kernel Source"
           KERNEL_URL="${{ inputs.kernel-url }}"
-          if [ ! -z "${{ inputs.repo-token }}" ]; then
-              KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
-          fi
+          [ ! -z "${{ inputs.repo-token }}" ] && KERNEL_URL=$(echo $KERNEL_URL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
           git clone "$KERNEL_URL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
-          cd kernel_src
           echo "::endgroup::"
 
           # 5. Build
           echo "::group:: Building"
-          # SỬA LỖI CP TẠI ĐÂY: Chỉ copy nếu đường dẫn khác nhau
+          cd kernel_src
           DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
-          
-          if [ -z "$REAL_CONF" ]; then
-              echo "❌ Config ${{ inputs.config }} not found!"
-              exit 1
-          fi
-
-          if [ "$REAL_CONF" != "$DEST_CONF" ]; then
-              echo "Copying config from $REAL_CONF to $DEST_CONF"
-              cp -f "$REAL_CONF" "$DEST_CONF"
-          else
-              echo "Config is already in the correct location."
-          fi
+          [ "$REAL_CONF" != "$DEST_CONF" ] && cp -f "$REAL_CONF" "$DEST_CONF"
 
           mkdir -p out
           ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
           
           make $ARGS ${{ inputs.config }}
-          make -j4 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          # GIỚI HẠN -j2 (Tránh lỗi Broken pipe do tràn RAM/I/O)
+          make -j2 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
           # 6. Packaging
