@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Stable Build - Auth & Linker Fix"
+description: "Final Stable Build - mkdtimg Fix"
 
 branding:
   icon: 'activity'
@@ -9,7 +9,7 @@ inputs:
   kernel-url:
     required: true
   repo-token:
-    required: true # Yêu cầu token để tránh lỗi 128
+    required: true
   kernel-branch:
     required: true
   config:
@@ -48,10 +48,16 @@ runs:
           fi
           echo "::endgroup::"
 
-          echo "::group:: Installing Dependencies"
+          echo "::group:: Installing Dependencies & mkdtimg"
           echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
           SU apt-get update
           SU apt-get install --no-install-recommends -y binutils git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
+          
+          # FIX LỖI MKDTIMG: Tải và cài đặt công cụ dtb của AOSP
+          wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz
+          mkdir -p dtb-utils && tar -xvf utils.tar.gz -C dtb-utils
+          SU cp dtb-utils/src/mkdtboimg.py /usr/bin/mkdtimg
+          SU chmod +x /usr/bin/mkdtimg
           SU ln -sf /usr/bin/python2.7 /usr/bin/python
           echo "::endgroup::"
 
@@ -64,7 +70,7 @@ runs:
           download_toolchain() {
               local url=$1; local name=$2; local dir=$3;
               mkdir -p "$dir"
-              aria2c -x 16 -s 16 -o "${name}.tar.gz" "$url"
+              aria2c -x 16 -s 16 -k 1M -o "${name}.tar.gz" "$url"
               tar -C "$dir" -zxf "${name}.tar.gz"
               rm -f "${name}.tar.gz"
           }
@@ -73,11 +79,12 @@ runs:
           download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc64" "$HOME/gcc-64"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc32" "$HOME/gcc-32"
+          
+          # Cập nhật PATH cho cả trình biên dịch và mkdtimg
           export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
           echo "::endgroup::"
 
           echo "::group:: Cloning Kernel Source"
-          # FIX LỖI 128: Chèn token trực tiếp vào URL theo cách an toàn nhất
           KURL=$(echo "${{ inputs.kernel-url }}" | sed 's|https://||')
           git clone --depth=1 "https://x-oauth-basic:${{ inputs.repo-token }}@$KURL" -b "${{ inputs.kernel-branch }}" kernel_src
           echo "::endgroup::"
@@ -90,19 +97,18 @@ runs:
           [ -z "$REAL_CONF" ] && echo "❌ Config not found!" && exit 1
           [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
 
-          # VÔ HIỆU HÓA LTO (Tránh lỗi linker Gold)
+          # Vô hiệu hóa LTO
           sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF"
           sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF"
-          sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/g' "$DEST_CONF"
           echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
           echo "::endgroup::"
 
           echo "::group:: Compiling"
           mkdir -p out
-          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+          # Truyền trực tiếp mkdtimg vào lệnh make
+          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang MKDTIMG=mkdtimg"
           
           make $ARGS ${{ inputs.config }}
-          # Dùng j3 để an toàn tuyệt đối cho RAM
           make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
@@ -111,6 +117,7 @@ runs:
               cd ..
               git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
               cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
+              # Kiểm tra và copy dtbo.img nếu tồn tại
               [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
               cd AnyKernel3 && zip -r ../build.zip ./*
               echo "::endgroup::"
