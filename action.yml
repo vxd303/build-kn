@@ -121,7 +121,7 @@ runs:
         ZIP_OUT="build-pixel3a-kernel.zip"
 
         echo "::group:: Clone AnyKernel3"
-        git clone --depth=1 https://github.com/kdrag0n/AnyKernel3 AnyKernel3
+        git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
         echo "::endgroup::"
 
         if [ ! -f $KERNEL_OUT/Image.gz ] && [ ! -f $KERNEL_OUT/Image ]; then
