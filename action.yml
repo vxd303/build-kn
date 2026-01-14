@@ -29,34 +29,40 @@ runs:
     - name: Cleanup & Setup environment
       shell: bash
       run: |
-        set -e
-        SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
-        
-        echo "::group:: Cleaning Runner"
-        # Gỡ bỏ các thành phần thừa để giải phóng dung lượng
-        SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
-        echo "::endgroup::"
+          set -e
+          SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
+          
+          # 1. Gỡ Homebrew và dọn dẹp PATH để tránh xung đột (Yếu tố thành công 1)
+          echo "::group:: Cleaning Runner"
+          aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
+          NONINTERACTIVE=1 bash ./uninstall.sh -f -q
+          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          echo "::endgroup::"
 
-        echo "::group:: Setting Up 16GB Swap"
-        SU fallocate -l 16G /swapfile
-        SU chmod 600 /swapfile
-        SU mkswap /swapfile
-        SU swapon /swapfile
-        echo "::endgroup::"
+          # 2. Thiết lập Swap 16GB chuẩn (Yếu tố thành công 2)
+          echo "::group:: Setting Up 16GB Swap"
+          if [ -f /bin/swapon ]; then
+              export SWAP_FILE=$(swapon --show=NAME | tail -n 1)
+              [ ! -z "$SWAP_FILE" ] && SU swapoff $SWAP_FILE && SU rm -f $SWAP_FILE
+              SU fallocate -l 16G /swapfile
+              SU chmod 600 /swapfile
+              SU mkswap /swapfile
+              SU swapon /swapfile
+          fi
+          echo "::endgroup::"
 
-        echo "::group:: Installing Dependencies"
-        SU apt-get update
-        SU apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu \
-          binutils-arm-linux-gnueabi git make bc bison openssl curl zip kmod cpio flex \
-          libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates \
-          python2.7 python3 xz-utils aria2 build-essential ccache parallel
-
-        wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz
-        mkdir -p dtb-utils && tar -xvf utils.tar.gz -C dtb-utils
-        SU cp dtb-utils/src/mkdtboimg.py /usr/bin/mkdtimg
-        SU chmod +x /usr/bin/mkdtimg
-        SU ln -sf /usr/bin/python2.7 /usr/bin/python
-        echo "::endgroup::"
+          # 3. Cài đặt dependencies và Python 2.7 (Quan trọng cho scripts Qualcomm)
+          echo "::group:: Installing Dependencies & mkdtimg"
+          echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
+          SU apt-get update
+          SU apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
+          
+          wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz
+          mkdir -p dtb-utils && tar -xvf utils.tar.gz -C dtb-utils
+          SU cp dtb-utils/src/mkdtboimg.py /usr/bin/mkdtimg
+          SU chmod +x /usr/bin/mkdtimg
+          SU ln -sf /usr/bin/python2.7 /usr/bin/python
+          echo "::endgroup::"
 
     - name: Build Kernel
       shell: bash
