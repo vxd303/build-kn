@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Stable Build - LTO Fix"
+description: "Final Stable Build - Linker Emulation Fix"
 
 branding:
   icon: 'activity'
@@ -31,7 +31,6 @@ runs:
       run: |
           set -e
           SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
-          
           echo "::group:: Cleaning Runner"
           aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
           NONINTERACTIVE=1 bash ./uninstall.sh -f -q
@@ -70,16 +69,17 @@ runs:
               rm -f "${name}.tar.gz"
           }
 
-          # Tải toolchain chuẩn
+          echo "::group:: Downloading Toolchains"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc64" "$HOME/gcc-64"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc32" "$HOME/gcc-32"
+          
+          # Thiết lập PATH ưu tiên Clang và GCC AOSP
+          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
+          echo "::endgroup::"
 
           # Clone Source
-          KURL="${{ inputs.kernel-url }}"
-          [ ! -z "${{ inputs.repo-token }}" ] && KURL=$(echo $KURL | sed "s|https://|https://x-oauth-basic:${{ inputs.repo-token }}@|")
-          git clone "$KURL" -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
-          
+          git clone ${{ inputs.kernel-url }} -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
           cd kernel_src
           
           # Fix Config Path
@@ -87,31 +87,23 @@ runs:
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
           [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
 
-          # --- QUAN TRỌNG: VÔ HIỆU HÓA LTO ĐỂ TRÁNH LỖI LINKER & RAM ---
+          # VÔ HIỆU HÓA LTO (Tránh lỗi Linker Gold/LLD)
           sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF"
           sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF"
           sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/g' "$DEST_CONF"
           echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
 
-          mkdir -p out
           echo "::group:: Compiling"
-          # Ép PATH chỉ dùng Toolchain đã tải
-          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
+          mkdir -p out
           
-          # Chạy defconfig trước
-          make O=out ARCH=${{ inputs.arch }} \
-               CROSS_COMPILE=aarch64-linux-android- \
-               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-               CLANG_TRIPLE=aarch64-linux-gnu- \
-               CC=clang LD=ld.lld ${{ inputs.config }}
-
-          # Build chính thức (Sử dụng LD=ld.lld để thay thế Gold Linker)
-          make -j4 O=out ARCH=${{ inputs.arch }} \
-               CROSS_COMPILE=aarch64-linux-android- \
-               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-               CLANG_TRIPLE=aarch64-linux-gnu- \
-               CC=clang LD=ld.lld \
-               KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error" all
+          # PHẦN QUAN TRỌNG: CROSS_COMPILE trỏ vào GCC 4.9 của AOSP để lấy Linker chuẩn
+          # Không dùng LD=ld.lld để tránh lỗi "target emulation unknown"
+          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+          
+          make $ARGS ${{ inputs.config }}
+          
+          # Build chính thức - Giảm j xuống 3 để an toàn bộ nhớ
+          make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
           # Packaging
@@ -123,7 +115,7 @@ runs:
               cd AnyKernel3 && zip -r ../build.zip ./*
           fi
 
-    - name: Upload result
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: kernel-${{ inputs.config }}
