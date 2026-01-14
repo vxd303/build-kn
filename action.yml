@@ -115,9 +115,9 @@ runs:
           make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
-              - name: Packaging AnyKernel3 (Pixel 3a compatible)
-      shell: bash
-      run: |
+        - name: Packaging AnyKernel3 (Pixel 3a compatible)
+          shell: bash
+          run: |
           set -e
 
           KERNEL_OUT=kernel_src/out/arch/arm64/boot
@@ -158,11 +158,10 @@ runs:
           sed -i 's/do.modules=1/do.modules=0/g' $AK
           sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' $AK
 
-          # Force kernel image name
-          if ! grep -q "kernel.string" $AK; then
-              echo "kernel.string=$KERNEL_NAME" >> $AK
-          else
+          if grep -q "kernel.string" $AK; then
               sed -i "s|kernel.string=.*|kernel.string=$KERNEL_NAME|g" $AK
+          else
+              echo "kernel.string=$KERNEL_NAME" >> $AK
           fi
 
           chmod +x $AK
@@ -176,8 +175,9 @@ runs:
 
           echo "✅ Pixel 3a flashable zip ready: $ZIP_OUT"
 
-    - name: Upload
+      - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-result
-        path: build.zip
+        name: pixel3a-kernel
+        path: build-pixel3a-kernel.zip
+
