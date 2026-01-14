@@ -104,7 +104,7 @@ runs:
         CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
         CC=clang \
         CLANG_TRIPLE=aarch64-linux-gnu- \
-        LD=ld.lld \
+        LD=$HOME/gcc-64/bin/aarch64-linux-android-ld.bfd \
         LLVM=1 LLVM_IAS=1"
 
         make $ARGS ${{ inputs.config }}
