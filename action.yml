@@ -105,7 +105,11 @@ runs:
         CC=clang \
         CLANG_TRIPLE=aarch64-linux-gnu- \
         LD=$HOME/gcc-64/bin/aarch64-linux-android-ld.bfd \
-        LLVM=1 LLVM_IAS=1"
+        AR=$HOME/gcc-64/bin/aarch64-linux-android-ar \
+        NM=$HOME/gcc-64/bin/aarch64-linux-android-nm \
+        OBJCOPY=$HOME/gcc-64/bin/aarch64-linux-android-objcopy \
+        OBJDUMP=$HOME/gcc-64/bin/aarch64-linux-android-objdump \
+        STRIP=$HOME/gcc-64/bin/aarch64-linux-android-strip"
 
         make $ARGS ${{ inputs.config }}
         make -j3 $ARGS all V=1
