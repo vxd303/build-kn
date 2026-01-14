@@ -19,7 +19,7 @@ jobs:
           repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           pass-zip: ${{ secrets.PASSZIP }}
           kernel-dir: msm-4.19
-          kernel-branch: thirteen
+          kernel-branch: twelve
           config: b1c1_defconfig
           arch: arm64
           aosp-gcc: true
