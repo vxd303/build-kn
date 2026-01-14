@@ -1,5 +1,5 @@
 name: 'Android Kernel Build Action'
-description: "Final Stable Build - Linker Emulation Fix"
+description: "Final Stable Build - Auth & Linker Fix"
 
 branding:
   icon: 'activity'
@@ -9,7 +9,7 @@ inputs:
   kernel-url:
     required: true
   repo-token:
-    required: false
+    required: true # Yêu cầu token để tránh lỗi 128
   kernel-branch:
     required: true
   config:
@@ -73,46 +73,47 @@ runs:
           download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc64" "$HOME/gcc-64"
           download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" "gcc32" "$HOME/gcc-32"
-          
-          # Thiết lập PATH ưu tiên Clang và GCC AOSP
           export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
           echo "::endgroup::"
 
-          # Clone Source
-          git clone ${{ inputs.kernel-url }} -b "${{ inputs.kernel-branch }}" --depth=1 kernel_src
+          echo "::group:: Cloning Kernel Source"
+          # FIX LỖI 128: Chèn token trực tiếp vào URL theo cách an toàn nhất
+          KURL=$(echo "${{ inputs.kernel-url }}" | sed 's|https://||')
+          git clone --depth=1 "https://x-oauth-basic:${{ inputs.repo-token }}@$KURL" -b "${{ inputs.kernel-branch }}" kernel_src
+          echo "::endgroup::"
+
           cd kernel_src
           
-          # Fix Config Path
+          echo "::group:: Fixing Config"
           DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
           REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
+          [ -z "$REAL_CONF" ] && echo "❌ Config not found!" && exit 1
           [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
 
-          # VÔ HIỆU HÓA LTO (Tránh lỗi Linker Gold/LLD)
+          # VÔ HIỆU HÓA LTO (Tránh lỗi linker Gold)
           sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF"
           sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF"
           sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/g' "$DEST_CONF"
           echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
+          echo "::endgroup::"
 
           echo "::group:: Compiling"
           mkdir -p out
-          
-          # PHẦN QUAN TRỌNG: CROSS_COMPILE trỏ vào GCC 4.9 của AOSP để lấy Linker chuẩn
-          # Không dùng LD=ld.lld để tránh lỗi "target emulation unknown"
           ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
           
           make $ARGS ${{ inputs.config }}
-          
-          # Build chính thức - Giảm j xuống 3 để an toàn bộ nhớ
+          # Dùng j3 để an toàn tuyệt đối cho RAM
           make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
           echo "::endgroup::"
 
-          # Packaging
           if [ "${{ inputs.anykernel3 }}" = "true" ]; then
+              echo "::group:: Packaging"
               cd ..
               git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
               cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image* AnyKernel3/
               [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
               cd AnyKernel3 && zip -r ../build.zip ./*
+              echo "::endgroup::"
           fi
 
     - name: Upload
