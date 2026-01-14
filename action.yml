@@ -104,10 +104,11 @@ runs:
         CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
         CC=clang \
         CLANG_TRIPLE=aarch64-linux-gnu- \
+        LD=ld.lld \
         LLVM=1 LLVM_IAS=1"
 
         make $ARGS ${{ inputs.config }}
-        make -j3 $ARGS all
+        make -j3 $ARGS all V=1
         echo "::endgroup::"
 
         echo "::group:: Build DTBs"
