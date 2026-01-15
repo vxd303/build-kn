@@ -1,5 +1,5 @@
-name: 'Pixel 3a Kernel Build - Corrected Logic'
-description: "Uses the successful build logic and fixes only the image packaging step."
+name: 'Pixel 3a Kernel Build - Correct Toolchain Sync'
+description: "Builds kernel with fully synchronized toolchains for Android 12 to fix assembler errors."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -16,11 +16,9 @@ runs:
       run: |
         set -e
         echo "::group::Freeing up disk space"
-        df -h
         sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
         sudo docker image prune -af || true
         sudo apt-get clean
-        echo "Space after cleanup:"
         df -h
         echo "::endgroup::"
         
@@ -30,17 +28,23 @@ runs:
         sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
         echo "::endgroup::"
 
-    - name: '2. Build Kernel'
+    - name: '2. Build Kernel with Synchronized Toolchains'
       shell: bash
       run: |
         set -e
-        # Tải Toolchains
-        echo "::group::Downloading Toolchains"
+        # --- PHẦN SỬA LỖI QUAN TRỌNG NHẤT ---
+        echo "::group::Downloading SYNCHRONIZED Toolchains for Android 12"
         mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        aria2c -x 16 -s 16 -o a.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r383902b.tar.gz && tar -C $HOME/clang -zxf a.tar.gz && rm a.tar.gz
-        aria2c -x 16 -s 16 -o b.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-64 -zxf b.tar.gz && rm b.tar.gz
-        aria2c -x 16 -s 16 -o c.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-32 -zxf c.tar.gz && rm c.tar.gz
+        # Tải Clang cho Android 12
+        aria2c -x 16 -s 16 -o clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r383902b.tar.gz" && tar -C $HOME/clang -zxf clang.tar.gz && rm clang.tar.gz
+        
+        # Tải GCC cho Android 12 (KHÔNG phải Android 13)
+        # Thay vì git clone, dùng URL archive để tải nhanh hơn
+        aria2c -x 16 -s 16 -o gcc64.tar.gz "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android12-release.tar.gz" && tar -C $HOME/gcc-64 -zxf gcc64.tar.gz && rm gcc64.tar.gz
+        aria2c -x 16 -s 16 -o gcc32.tar.gz "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android12-release.tar.gz" && tar -C $HOME/gcc-32 -zxf gcc32.tar.gz && rm gcc32.tar.gz
+        
         export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
+        echo "Toolchains are now synchronized."
         echo "::endgroup::"
         
         # Clone đúng source và branch
@@ -49,11 +53,11 @@ runs:
         cd kernel_src
         echo "::endgroup::"
         
-        # Build Kernel với lệnh chung và -j1 để ổn định
+        # Build Kernel với -j1 để đảm bảo ổn định
         echo "::group::Building Kernel (using -j1 for stability)"
         mkdir -p out
         make O=out ARCH=arm64 b1c1_defconfig
-        make -j2 O=out ARCH=arm64 \
+        make -j1 O=out ARCH=arm64 \
             CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -62,7 +66,6 @@ runs:
         echo "::endgroup::"
 
     - name: '3. Package AnyKernel3 & Upload'
-      # Bước này sử dụng logic đóng gói linh hoạt đã được chứng minh là thành công
       env:
         ANYKERNEL_SCRIPT: |
           properties() {
@@ -89,28 +92,17 @@ runs:
         echo "::group::Packaging AnyKernel3"
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3
         
-        # --- PHẦN SỬA DUY NHẤT VÀ QUAN TRỌNG NHẤT ---
-        # Logic sao chép linh hoạt, không giả định tên file
-        echo "Looking for kernel image..."
+        # Logic sao chép linh hoạt đã được chứng minh
         if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
             cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
-            echo "✅ Found and copied Image.*-dtb"
         elif [ -f kernel_src/out/arch/arm64/boot/Image.lz4 ]; then
             cp kernel_src/out/arch/arm64/boot/Image.lz4 AnyKernel3/ -v
-            echo "✅ Found and copied Image.lz4"
         elif [ -f kernel_src/out/arch/arm64/boot/Image.gz ]; then
             cp kernel_src/out/arch/arm64/boot/Image.gz AnyKernel3/ -v
-            echo "✅ Found and copied Image.gz"
-        elif [ -f kernel_src/out/arch/arm64/boot/Image ]; then
-            cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
-            echo "✅ Found and copied raw Image file"
         else
-            echo "❌ Critical Error: No kernel image (Image.* or Image) found after build!"
-            ls -lR kernel_src/out/arch/arm64/boot/
-            exit 1
+            cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
         fi
         
-        # Sao chép dtbo.img nếu có
         test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
         
         echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
