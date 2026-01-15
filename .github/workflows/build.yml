@@ -20,7 +20,7 @@ jobs:
           pass-zip: ${{ secrets.PASSZIP }}
           kernel-dir: msm-4.19
           kernel-branch: twelve
-          config: b1c1_defconfig
+          config: bonito_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
