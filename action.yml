@@ -98,7 +98,7 @@ runs:
         echo "::endgroup::"
         
      - name: '3. Package AnyKernel3 & Upload'
-      env:
+        env:
         ANYKERNEL_SCRIPT: |
           properties() {
           kernel.string=Custom Kernel for Pixel 3a/3a XL by vxd303
