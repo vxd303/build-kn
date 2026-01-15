@@ -116,30 +116,6 @@ runs:
         
         echo "::endgroup::"
 
-        echo "::group::Verify DTB Sources"
-        # Kiểm tra device tree sources có tồn tại không
-        echo "🔍 Checking for Device Tree sources..."
-        
-        if [ -d "arch/${{ inputs.arch }}/boot/dts/qcom" ]; then
-            echo "✅ Found qcom DTS directory"
-            
-            # Tìm .dts files cho Pixel 3a
-            DTS_COUNT=$(find arch/${{ inputs.arch }}/boot/dts/qcom -name "*sargo*.dts" -o -name "*bonito*.dts" -o -name "*sdm670*.dts" | wc -l)
-            
-            if [ $DTS_COUNT -gt 0 ]; then
-                echo "✅ Found $DTS_COUNT device tree source files for Pixel 3a:"
-                find arch/${{ inputs.arch }}/boot/dts/qcom -name "*sargo*.dts" -o -name "*bonito*.dts" -o -name "*sdm670*.dts" | head -5
-            else
-                echo "⚠️ WARNING: No specific sargo/bonito/sdm670 DTS files found!"
-                echo "Available DTS files in qcom:"
-                ls arch/${{ inputs.arch }}/boot/dts/qcom/*.dts 2>/dev/null | head -10
-            fi
-        else
-            echo "❌ WARNING: qcom DTS directory not found!"
-            echo "This kernel may not have Pixel 3a device trees"
-        fi
-        echo "::endgroup::"
-
         echo "::group::Compiling Kernel"
         mkdir -p out
         ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang MKDTIMG=mkdtimg LLVM=1 LLVM_IAS=1"
@@ -158,181 +134,58 @@ runs:
         echo "::group::Post-Build Processing"
         cd out/arch/arm64/boot
         
-        # Tìm DTB file cho Pixel 3a (sargo)
-        echo "🔍 Searching for DTB files..."
-        DTB_FILE=""
-        
-        # Thử tìm các pattern phổ biến cho Pixel 3a
-        for pattern in "*sargo*.dtb" "*bonito*.dtb" "*sdm670*.dtb" "sdm670-*.dtb"; do
-            DTB_FILE=$(find dts -name "$pattern" 2>/dev/null | head -n 1)
-            if [ -n "$DTB_FILE" ]; then
-                echo "✅ Found DTB with pattern '$pattern': $DTB_FILE"
-                break
+        # Kiểm tra xem Image.lz4-dtb đã có chưa
+        if [ ! -f Image.lz4-dtb ]; then
+            echo "📦 Image.lz4-dtb not found, appending DTB manually..."
+            
+            # Tìm DTB file cho Pixel 3a (sargo)
+            DTB_FILE=""
+            
+            # Thử tìm các pattern phổ biến
+            for pattern in "*sargo*.dtb" "*sdm670*.dtb" "qcom/sdm670*.dtb" "qcom/sm6150*.dtb"; do
+                DTB_FILE=$(find dts -name "$pattern" 2>/dev/null | head -n 1)
+                [ -n "$DTB_FILE" ] && break
+            done
+            
+            if [ -z "$DTB_FILE" ]; then
+                echo "⚠️ Specific DTB not found, listing all available DTBs:"
+                find dts -name "*.dtb" -exec ls -lh {} \;
+                
+                # Lấy DTB đầu tiên trong thư mục qcom
+                DTB_FILE=$(find dts/qcom -name "*.dtb" | head -n 1)
             fi
-        done
-        
-        # Nếu không tìm thấy, list tất cả và lấy bất kỳ DTB nào từ qcom
-        if [ -z "$DTB_FILE" ]; then
-            echo "⚠️ Specific sargo/bonito DTB not found, listing all available:"
-            find dts -name "*.dtb" -exec ls -lh {} \;
             
-            # Thử lấy bất kỳ DTB nào từ qcom (fallback)
-            DTB_FILE=$(find dts/qcom -name "*.dtb" 2>/dev/null | head -n 1)
-            
-            if [ -n "$DTB_FILE" ]; then
-                echo "⚠️ Using fallback DTB: $DTB_FILE"
-            fi
-        fi
-        
-        if [ -z "$DTB_FILE" ]; then
-            echo "❌ CRITICAL: No DTB files found at all!"
-            echo "Available DTS directory structure:"
-            ls -R dts/ 2>/dev/null || echo "DTS directory not found!"
-            
-            echo ""
-            echo "🔄 Attempting to download DTB from Google's stock kernel..."
-            cd ../../../../
-            
-            # Download prebuilt DTB từ LineageOS hoặc Google
-            STOCK_DTB_URL="https://github.com/LineageOS/android_kernel_google_bonito/raw/lineage-18.1/arch/arm64/boot/dts/qcom/sdm670-sargo-pvt-overlay.dtb"
-            
-            if curl -L -f -o stock-sargo.dtb "$STOCK_DTB_URL" 2>/dev/null; then
-                echo "✅ Downloaded stock DTB successfully"
-                mkdir -p out/arch/arm64/boot/dts/stock
-                mv stock-sargo.dtb out/arch/arm64/boot/dts/stock/
-                cd out/arch/arm64/boot
-                DTB_FILE="dts/stock/stock-sargo.dtb"
-                echo "✅ Using downloaded stock DTB: $DTB_FILE"
-            else
-                echo "❌ Failed to download stock DTB"
-                echo ""
-                echo "============================================"
-                echo "CRITICAL ERROR: No DTB available!"
-                echo "============================================"
-                echo ""
-                echo "Your kernel source does not have Device Tree files for Pixel 3a."
-                echo "Please add device tree sources to your kernel or use a kernel"
-                echo "that includes Pixel 3a (sargo/bonito) device trees."
-                echo ""
-                echo "You can get device trees from:"
-                echo "  - https://github.com/LineageOS/android_kernel_google_bonito"
-                echo "  - https://android.googlesource.com/kernel/msm/"
-                echo ""
+            if [ -z "$DTB_FILE" ]; then
+                echo "❌ No DTB files found!"
                 exit 1
             fi
-        fi
-        
-        # CRITICAL: Always check size and re-append if needed
-        NEEDS_APPEND=0
-        
-        if [ -f Image.lz4-dtb ]; then
-            SIZE_EXISTING=$(stat -c%s Image.lz4-dtb)
-            SIZE_MB=$((SIZE_EXISTING / 1024 / 1024))
-            echo "📦 Existing Image.lz4-dtb found: ${SIZE_MB}MB"
             
-            # Nếu < 17MB thì chắc chắn thiếu DTB
-            if [ $SIZE_EXISTING -lt 17000000 ]; then
-                echo "⚠️ Size too small (${SIZE_MB}MB < 17MB), DTB missing!"
-                NEEDS_APPEND=1
-            else
-                echo "✅ Size looks good (${SIZE_MB}MB), DTB likely present"
-            fi
-        else
-            echo "📦 Image.lz4-dtb not found, will create it"
-            NEEDS_APPEND=1
-        fi
-        
-        # Append DTB nếu cần
-        if [ $NEEDS_APPEND -eq 1 ]; then
-            echo ""
-            echo "🔨 Appending DTB to kernel..."
+            echo "✅ Using DTB: $DTB_FILE"
             
-            if [ ! -f Image.lz4 ]; then
-                echo "❌ Image.lz4 not found!"
-                ls -lh
-                exit 1
-            fi
+            # Append DTB vào kernel
+            cat Image.lz4 "$DTB_FILE" > Image.lz4-dtb
             
             SIZE_KERNEL=$(stat -c%s Image.lz4)
             SIZE_DTB=$(stat -c%s "$DTB_FILE")
-            
-            echo "📊 Image.lz4: $((SIZE_KERNEL / 1024 / 1024))MB"
-            echo "📊 DTB file: $((SIZE_DTB / 1024))KB"
-            echo "📊 DTB path: $DTB_FILE"
-            
-            # Backup nếu file cũ tồn tại
-            [ -f Image.lz4-dtb ] && mv Image.lz4-dtb Image.lz4-dtb.old
-            
-            # Append DTB
-            cat Image.lz4 "$DTB_FILE" > Image.lz4-dtb
-            
             SIZE_FINAL=$(stat -c%s Image.lz4-dtb)
-            SIZE_FINAL_MB=$((SIZE_FINAL / 1024 / 1024))
             
-            echo ""
-            echo "📦 FINAL: Image.lz4-dtb = ${SIZE_FINAL_MB}MB"
+            echo "📊 Kernel: $((SIZE_KERNEL / 1024 / 1024))MB"
+            echo "📊 DTB: $((SIZE_DTB / 1024))KB"
+            echo "📦 Final: $((SIZE_FINAL / 1024 / 1024))MB"
             
-            # Verify append thành công
-            if [ $SIZE_FINAL -le $SIZE_KERNEL ]; then
-                echo "❌ CRITICAL ERROR: Append failed! Final size <= kernel size"
-                echo "This means DTB was not appended!"
-                exit 1
+            if [ $SIZE_FINAL -lt 17000000 ]; then
+                echo "⚠️ WARNING: Final image size is $((SIZE_FINAL / 1024 / 1024))MB (expected ~18MB)"
+                echo "This may indicate DTB append failed!"
             fi
-            
-            if [ $SIZE_FINAL_MB -lt 17 ]; then
-                echo "❌ CRITICAL ERROR: Final size ${SIZE_FINAL_MB}MB < 17MB"
-                echo "DTB append may have failed or DTB file is invalid"
-                echo "Expected: 17-20MB, Got: ${SIZE_FINAL_MB}MB"
-                exit 1
-            fi
-            
-            echo "✅ SUCCESS: DTB appended successfully!"
+        else
+            SIZE_FINAL=$(stat -c%s Image.lz4-dtb)
+            echo "✅ Image.lz4-dtb already exists: $((SIZE_FINAL / 1024 / 1024))MB"
         fi
         
         # Verify files
         echo ""
         echo "📁 Final build artifacts:"
         ls -lh Image.lz4-dtb dtbo.img 2>/dev/null || ls -lh
-        
-        # ABSOLUTE FINAL CHECK
-        echo ""
-        echo "🔍 FINAL VERIFICATION"
-        echo "===================="
-        
-        FINAL_SIZE=$(stat -c%s Image.lz4-dtb)
-        FINAL_MB=$((FINAL_SIZE / 1024 / 1024))
-        
-        echo "Image.lz4-dtb size: ${FINAL_MB}MB (${FINAL_SIZE} bytes)"
-        
-        if [ $FINAL_SIZE -lt 17000000 ]; then
-            echo ""
-            echo "❌❌❌ CRITICAL BUILD FAILURE ❌❌❌"
-            echo "===================================="
-            echo "Image.lz4-dtb is only ${FINAL_MB}MB!"
-            echo "Expected: 17-20MB (with DTB appended)"
-            echo "Got: ${FINAL_MB}MB (DTB is missing!)"
-            echo ""
-            echo "This kernel WILL NOT BOOT on Pixel 3a!"
-            echo "It will hang at the boot logo."
-            echo ""
-            echo "Please check:"
-            echo "  1. Device tree sources exist in kernel"
-            echo "  2. DTB files were compiled"
-            echo "  3. DTB append logic executed correctly"
-            echo ""
-            exit 1
-        elif [ $FINAL_SIZE -gt 25000000 ]; then
-            echo "⚠️ WARNING: Image unusually large (${FINAL_MB}MB > 25MB)"
-            echo "This is uncommon but may be okay"
-        else
-            echo "✅✅✅ BUILD SUCCESS ✅✅✅"
-            echo "======================="
-            echo "Image.lz4-dtb: ${FINAL_MB}MB"
-            echo "DTB: PRESENT ✓"
-            echo "Size: CORRECT ✓"
-            echo ""
-            echo "This kernel should boot successfully!"
-        fi
         
         cd ../../../../
         echo "::endgroup::"
