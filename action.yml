@@ -1,5 +1,5 @@
-name: 'Android Kernel Build Action - Pixel 3a Fixed'
-description: "Complete build with DTB appending for Pixel 3a (sargo) - Fixed boot hang"
+name: 'Android Kernel Build Action - Pixel 3a Fixed (Definitive)'
+description: "Correctly compiles and appends the full DTB for Pixel 3a (sargo)."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -23,71 +23,94 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Cleanup & Setup environment
+    - name: 'Setup Environment'
       shell: bash
       run: |
         set -e
+        # Các lệnh setup giữ nguyên
         SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
-        echo "::group::Cleaning Runner Environment"
+        echo "::group::Setup Environment"
         if [ -f "/usr/local/bin/brew" ]; then
           aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh && NONINTERACTIVE=1 bash ./uninstall.sh -f -q >/dev/null 2>&1 || true
         fi
         SU rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
-        echo "::endgroup::"
-        echo "::group::Setting Up Swap"
-        if [ -f /sbin/swapon ]; then
-            SWAP_FILE=$(sudo swapon --show=NAME | tail -n 1)
-            [ ! -z "$SWAP_FILE" ] && SU swapoff "$SWAP_FILE" && SU rm -f "$SWAP_FILE"
-            SU fallocate -l 16G /swapfile && SU chmod 600 /swapfile && SU mkswap /swapfile && SU swapon /swapfile
-        fi
-        echo "::endgroup::"
-        echo "::group::Installing Dependencies"
+        SU fallocate -l 16G /swapfile && SU chmod 600 /swapfile && SU mkswap /swapfile && SU swapon /swapfile
         echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
-        SU apt-get update
-        SU apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
-        wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz
-        tar -xvf utils.tar.gz -C .
+        SU apt-get update && SU apt-get install --no-install-recommends -y binutils-aarch64-linux-gnu git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential
+        wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz && tar -xvf utils.tar.gz -C .
         SU cp src/mkdtboimg.py /usr/bin/mkdtimg && SU chmod +x /usr/bin/mkdtimg
         SU ln -sf /usr/bin/python2.7 /usr/bin/python
         echo "::endgroup::"
 
-    - name: Build Kernel
+    - name: 'Build Kernel & Manually Compile/Append Correct DTB'
       shell: bash
       run: |
         set -e
+        # Download toolchains
         download_toolchain() {
-            aria2c -x 16 -s 16 -k 1M -d "$3" -o "$(basename $1)" "$1"
-            tar -C "$3" -xf "$3/$(basename $1)"
-            rm -f "$3/$(basename $1)"
+            aria2c -x 16 -s 16 -k 1M -d "$2" -o "$(basename $1)" "$1" && tar -C "$2" -xf "$2/$(basename $1)" && rm -f "$2/$(basename $1)"
         }
         echo "::group::Downloading Toolchains"
         mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "gcc64" "$HOME/gcc-64"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "gcc32" "$HOME/gcc-32"
+        download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "$HOME/clang"
+        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-64"
+        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-32"
         export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
         echo "::endgroup::"
+
+        # Clone source
         echo "::group::Cloning Kernel Source"
         KURL=$(echo "${{ inputs.kernel-url }}" | sed 's|https://||')
         git clone --depth=1 "https://x-oauth-basic:${{ inputs.repo-token }}@$KURL" -b "${{ inputs.kernel-branch }}" kernel_src
-        echo "::endgroup::"
         cd kernel_src
+        echo "::endgroup::"
+
+        # Prepare config
         echo "::group::Preparing Config"
         DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
         sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF" || true
         sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF" || true
         grep -q "CONFIG_LTO_NONE" "$DEST_CONF" || echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
         echo "::endgroup::"
-        echo "::group::Compiling Kernel"
+
+        # --- PHẦN SỬA LỖI CUỐI CÙNG ---
+        echo "::group::Compiling and Appending DTB"
         mkdir -p out
-        ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang MKDTIMG=mkdtimg LLVM=1 LLVM_IAS=1"
+        ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+        
+        # 1. Build kernel và dtbs riêng biệt
         make $ARGS ${{ inputs.config }}
-        echo "Building kernel images..."
-        if ! make -j$(nproc) $ARGS Image.lz4-dtb dtbo.img; then
-            echo "::error::Failed to build Image.lz4-dtb and/or dtbo.img. Check your kernel source and config."
+        make -j$(nproc) $ARGS Image.lz4 dtbs dtbo.img
+
+        cd out
+        
+        # 2. Dùng `dtc` để biên dịch file .dts nguồn thành file .dtb hoàn chỉnh
+        #    Đây là file nguồn chính cho Pixel 3a, nó sẽ tự #include các overlay khác.
+        CORRECT_DTS_SOURCE="arch/arm64/boot/dts/qcom/sdm670-sargo-idp.dts"
+        
+        if [ ! -f "$CORRECT_DTS_SOURCE" ]; then
+            echo "::error::Critical: The main DTS source file ($CORRECT_DTS_SOURCE) was not found."
             exit 1
         fi
-        echo "✅ Kernel artifacts built successfully."
+        
+        echo "Compiling full DTB from $CORRECT_DTS_SOURCE using 'dtc'..."
+        # Lệnh dtc sẽ đọc file .dts và tất cả các file nó #include, tạo ra 1 file .dtb duy nhất
+        dtc -@ -I dts -O dtb -o custom-sargo.dtb "$CORRECT_DTS_SOURCE"
+        
+        # 3. Nối kernel với file DTB vừa được biên dịch đúng cách
+        echo "Appending custom-compiled DTB to kernel..."
+        cat arch/arm64/boot/Image.lz4 custom-sargo.dtb > arch/arm64/boot/Image.lz4-dtb
+
+        # 4. Kiểm tra kích thước lần cuối
+        SIZE_FINAL=$(stat -c%s arch/arm64/boot/Image.lz4-dtb)
+        echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
+
+        if [ $SIZE_FINAL -lt 17000000 ]; then
+            echo "::warning::Final image size is still smaller than expected. Check kernel source config."
+        else
+            echo "✅ Final image size looks correct (>= 17MB)."
+        fi
+        cd ..
         echo "::endgroup::"
 
     - name: Packaging AnyKernel3
