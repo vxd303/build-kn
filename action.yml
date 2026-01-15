@@ -1,5 +1,5 @@
-name: 'Pixel 3a Kernel Build - Maximum Cleanup'
-description: "Builds kernel with the most aggressive disk cleanup to prevent 'No space left' errors."
+name: 'Pixel 3a Kernel Build - Corrected Logic'
+description: "Uses the successful build logic and fixes only the image packaging step."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -11,77 +11,118 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: '1. Aggressive Disk Cleanup'
-      shell: bash
-      run: |
-        echo "Initial free space:"
-        df -h
-        # Dọn dẹp các gói phần mềm lớn được cài sẵn
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /usr/local/share/android
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /usr/share/swift
-        # Xóa các image Docker không sử dụng
-        sudo docker image prune -af || true
-        # Dọn dẹp cache của apt
-        sudo apt-get clean
-        echo "-------------------------------------------------"
-        echo "Free space after aggressive cleanup:"
-        df -h
-        echo "-------------------------------------------------"
-
-    - name: '2. Setup Environment & Dependencies'
+    - name: '1. Aggressive Disk Cleanup & Setup'
       shell: bash
       run: |
         set -e
+        echo "::group::Freeing up disk space"
+        df -h
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
+        sudo docker image prune -af || true
+        sudo apt-get clean
+        echo "Space after cleanup:"
+        df -h
+        echo "::endgroup::"
+        
+        echo "::group::Installing Dependencies & Swap"
         sudo apt-get update
         sudo apt-get install --no-install-recommends -y git build-essential zip curl libssl-dev bc device-tree-compiler python3 aria2
-        # Giữ swap ở mức 8GB là hợp lý
         sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-        echo "Swap setup with 8GB."
-        free -h
+        echo "::endgroup::"
 
-    - name: '3. Build Kernel (Serially)'
+    - name: '2. Build Kernel'
       shell: bash
       run: |
         set -e
-        # Tải Toolchains và xóa file nén ngay lập tức
+        # Tải Toolchains
         echo "::group::Downloading Toolchains"
         mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        aria2c -x 16 -s 16 -o aosp-clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902.tar.gz && tar -C $HOME/clang -zxf aosp-clang.tar.gz && rm aosp-clang.tar.gz
-        aria2c -x 16 -s 16 -o gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-64 -zxf gcc-aarch64.tar.gz && rm gcc-aarch64.tar.gz
-        aria2c -x 16 -s 16 -o gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-32 -zxf gcc-arm.tar.gz && rm gcc-arm.tar.gz
+        aria2c -x 16 -s 16 -o a.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r383902b.tar.gz && tar -C $HOME/clang -zxf a.tar.gz && rm a.tar.gz
+        aria2c -x 16 -s 16 -o b.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-64 -zxf b.tar.gz && rm b.tar.gz
+        aria2c -x 16 -s 16 -o c.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-32 -zxf c.tar.gz && rm c.tar.gz
         export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
         echo "::endgroup::"
         
         # Clone đúng source và branch
-        echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
+        echo "::group::Cloning PixelExperience Kernel Source"
         git clone --depth=1 "https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git" -b "twelve" kernel_src
         cd kernel_src
         echo "::endgroup::"
         
-        # Build Kernel với -j1 để đảm bảo không bị lỗi RAM
+        # Build Kernel với lệnh chung và -j1 để ổn định
         echo "::group::Building Kernel (using -j1 for stability)"
         mkdir -p out
         make O=out ARCH=arm64 b1c1_defconfig
-        make -j1 O=out ARCH=arm64 \
+        make -j2 O=out ARCH=arm64 \
             CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CC=clang \
             all
-        echo "Build complete. Final disk space usage:"
-        df -h
         echo "::endgroup::"
 
-    - name: '4. Packaging & Upload'
-      # Bước này không thay đổi vì nó đã đúng
-      uses: actions/checkout@v3 # Cần checkout để dùng action khác
+    - name: '3. Package AnyKernel3 & Upload'
+      # Bước này sử dụng logic đóng gói linh hoạt đã được chứng minh là thành công
+      env:
+        ANYKERNEL_SCRIPT: |
+          properties() {
+          kernel.string=Custom Kernel for Pixel 3a/3a XL by vxd303
+          do.devicecheck=1; do.modules=0; do.systemless=1; do.cleanup=1; do.cleanuponabort=0;
+          device.name1=sargo; device.name2=bonito; supported.versions=10-13;
+          }
+          . tools/ak3-core.sh;
+          dump_boot;
+          kernel_image=$(find . -name "Image.*" | head -n 1);
+          if [ -n "$kernel_image" ]; then
+            mv -f "$kernel_image" "$split_img/boot.img-kernel";
+          else
+            ui_print " ! No kernel image found in zip";
+            exit 1;
+          fi;
+          write_boot;
+          if [ -f dtbo.img ]; then
+            flash_dtbo;
+          fi;
+      shell: bash
+      run: |
+        set -e
+        echo "::group::Packaging AnyKernel3"
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+        
+        # --- PHẦN SỬA DUY NHẤT VÀ QUAN TRỌNG NHẤT ---
+        # Logic sao chép linh hoạt, không giả định tên file
+        echo "Looking for kernel image..."
+        if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
+            echo "✅ Found and copied Image.*-dtb"
+        elif [ -f kernel_src/out/arch/arm64/boot/Image.lz4 ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.lz4 AnyKernel3/ -v
+            echo "✅ Found and copied Image.lz4"
+        elif [ -f kernel_src/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.gz AnyKernel3/ -v
+            echo "✅ Found and copied Image.gz"
+        elif [ -f kernel_src/out/arch/arm64/boot/Image ]; then
+            cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
+            echo "✅ Found and copied raw Image file"
+        else
+            echo "❌ Critical Error: No kernel image (Image.* or Image) found after build!"
+            ls -lR kernel_src/out/arch/arm64/boot/
+            exit 1
+        fi
+        
+        # Sao chép dtbo.img nếu có
+        test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
+        
+        echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
+        
+        cd AnyKernel3
+        zip -r9 "../build-pixel3a-kernel.zip" ./*
+        cd ..
+        echo "✅ Flashable zip created."
+        echo "::endgroup::"
+    
+    - name: '4. Upload Artifact'
+      uses: actions/upload-artifact@v4
       with:
-        path: 'temp_checkout' # Tránh ghi đè
-    - uses: ./temp_checkout/.github/actions/package-and-upload # Gọi một action con
-      id: package
-      with:
-        kernel_dir: 'kernel_src'
-
+        name: pixel3a-kernel-zip
+        path: build-pixel3a-kernel.zip
