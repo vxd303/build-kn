@@ -97,30 +97,21 @@ runs:
         fi
         echo "::endgroup::"
         
-    - name: Packaging AnyKernel3
-      # Bước này và các bước sau giữ nguyên y hệt phiên bản trước, không cần thay đổi
+     - name: '3. Package AnyKernel3 & Upload'
       env:
         ANYKERNEL_SCRIPT: |
-          # AnyKernel3 Ramdisk Mod Script
-          # osm0sis @ xda-developers
           properties() {
-          kernel.string=Custom Kernel for Pixel 3a/3a XL by GitHub Actions
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=sargo
-          device.name2=bonito
-          supported.versions=10-13
+          kernel.string=Custom Kernel for Pixel 3a/3a XL by vxd303
+          do.devicecheck=1; do.modules=0; do.systemless=1; do.cleanup=1; do.cleanuponabort=0;
+          device.name1=sargo; device.name2=bonito; supported.versions=10-13;
           }
-          # shell variables
           . tools/ak3-core.sh;
           dump_boot;
-          if [ -f Image.lz4-dtb ]; then
-            mv -f Image.lz4-dtb "$split_img/boot.img-kernel";
+          kernel_image=$(find . -name "Image.*" | head -n 1);
+          if [ -n "$kernel_image" ]; then
+            mv -f "$kernel_image" "$split_img/boot.img-kernel";
           else
-            ui_print " ! Kernel image (Image.lz4-dtb) not found in zip";
+            ui_print " ! No kernel image found in zip";
             exit 1;
           fi;
           write_boot;
@@ -130,42 +121,28 @@ runs:
       shell: bash
       run: |
         set -e
-        # Chú ý: đường dẫn KERNEL_OUT phải được tính từ thư mục gốc của workspace
-        KERNEL_OUT="kernel_src/out/arch/${{ inputs.arch }}/boot"
-        ZIP_OUT="build-pixel3a-kernel.zip"
+        echo "::group::Packaging AnyKernel3"
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
         
-        echo "::group::Clone AnyKernel3"
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-        echo "::endgroup::"
-        
-        echo "::group::Copying kernel files"
-        if [ -f "$KERNEL_OUT/Image.lz4-dtb" ]; then
-            cp "$KERNEL_OUT/Image.lz4-dtb" AnyKernel3/Image.lz4-dtb
-            echo "✅ Using Image.lz4-dtb"
+        # Logic sao chép linh hoạt đã được chứng minh
+        if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
+        elif [ -f kernel_src/out/arch/arm64/boot/Image.lz4 ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.lz4 AnyKernel3/ -v
+        elif [ -f kernel_src/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel_src/out/arch/arm64/boot/Image.gz AnyKernel3/ -v
         else
-            echo "❌ Critical Error: Final Image.lz4-dtb not found after build!"
-            ls -lah "$KERNEL_OUT/"
-            exit 1
+            cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
         fi
         
-        if [ -f "$KERNEL_OUT/dtbo.img" ]; then
-            cp "$KERNEL_OUT/dtbo.img" AnyKernel3/
-            echo "✅ dtbo.img copied."
-        else
-            echo "⚠️ Warning: dtbo.img not found."
-        fi
-        echo "::endgroup::"
+        test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
         
-        echo "::group::Configuring AnyKernel3"
         echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
-        chmod +x AnyKernel3/anykernel.sh
-        echo "::endgroup::"
         
-        echo "::group::Creating flashable ZIP"
         cd AnyKernel3
-        zip -r9 "../$ZIP_OUT" ./*
+        zip -r9 "../build-pixel3a-kernel.zip" ./*
         cd ..
-        echo "✅ Flashable zip created: $ZIP_OUT"
+        echo "✅ Flashable zip created."
         echo "::endgroup::"
 
     - name: Upload Artifact
