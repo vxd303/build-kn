@@ -162,44 +162,20 @@ runs:
 
         echo "::group::Configuring AnyKernel3 for Pixel 3a"
         # Sử dụng anykernel.sh tùy chỉnh cho Pixel 3a (sargo/bonito)
-        cat > AnyKernel3/anykernel.sh <<'EOAKS'
-# AnyKernel3 Ramdisk Mod Script
-# osm0sis @ xda-developers
-
+        cat <<'EOF' > AnyKernel3/anykernel.sh
+#!/sbin/sh
 properties() {
-kernel.string=Custom Kernel for Pixel 3a/3a XL by GitHub Actions
+kernel.string=Custom Kernel for Pixel 3a
 do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
 device.name1=sargo
 device.name2=bonito
-supported.versions=10-13
 }
-
-# shell variables
 . tools/ak3-core.sh;
-
 dump_boot;
-
-# logic to find kernel image name inside the zip
-kernel_image=$(find . -name "Image.*-dtb" | head -n 1);
-
-if [ -f "$kernel_image" ]; then
-  # Di chuyển kernel đã được nối DTB vào đúng vị trí
-  mv -f "$kernel_image" "$split_img/boot.img-kernel";
-else
-  # Fallback nếu tên file khác, mặc dù logic trước đó đã bắt lỗi
-  ui_print "  ! No kernel image found in zip";
-  exit 1;
-fi;
-
 write_boot;
 flash_dtbo;
-## end install
-EOAKS
-        chmod +x AnyKernel3/anykernel.sh
+EOF
+  chmod +x AnyKernel3/anykernel.sh
         echo "::endgroup::"
 
         echo "::group::Creating flashable ZIP"
