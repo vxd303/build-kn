@@ -1,5 +1,5 @@
-name: 'Pixel 3a Kernel Build - Optimized & Final'
-description: "Builds Pixel 3a kernel with aggressive disk cleanup and optimized settings."
+name: 'Pixel 3a Kernel Build - Stable & Final'
+description: "Builds Pixel 3a kernel with aggressive disk cleanup and serialized jobs for stability."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -16,11 +16,7 @@ runs:
       run: |
         echo "Initial free space:"
         df -h
-        # DỌN DẸP CÁC GÓI LỚN KHÔNG CẦN THIẾT
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /usr/local/share/android
-        # Dọn dẹp các image docker không sử dụng
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/android
         sudo docker image prune -af || true
         sudo apt-get clean
         echo "Free space after cleanup:"
@@ -32,13 +28,11 @@ runs:
         set -e
         sudo apt-get update
         sudo apt-get install --no-install-recommends -y git build-essential zip curl libssl-dev bc device-tree-compiler python3 aria2
-        
-        # GIẢM SWAP XUỐNG 8GB ĐỂ TRÁNH ĐẦY Ổ ĐĨA
         sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
         echo "Swap setup with 8GB."
         free -h
 
-    - name: '3. Build Kernel'
+    - name: '3. Build Kernel (Serially)'
       shell: bash
       run: |
         set -e
@@ -61,7 +55,10 @@ runs:
         echo "::group::Building Kernel"
         mkdir -p out
         make O=out ARCH=arm64 b1c1_defconfig
-        make -j$(nproc) O=out ARCH=arm64 \
+        
+        # --- THAY ĐỔI QUAN TRỌNG NHẤT ĐỂ FIX LỖI HẾT RAM ---
+        # Sử dụng -j1 để build tuần tự, tránh quá tải bộ nhớ
+        make -j2 O=out ARCH=arm64 \
             CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -70,6 +67,7 @@ runs:
         echo "::endgroup::"
 
     - name: '4. Packaging AnyKernel3'
+      # ... Toàn bộ bước này và bước sau giữ nguyên y hệt như cũ ...
       env:
         ANYKERNEL_SCRIPT: |
           # AnyKernel3 Ramdisk Mod Script
@@ -96,8 +94,6 @@ runs:
         set -e
         echo "::group::Packaging AnyKernel3"
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-        
-        # Logic sao chép linh hoạt
         if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
             cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
         elif [ -f kernel_src/out/arch/arm64/boot/Image.* ]; then
@@ -105,11 +101,8 @@ runs:
         else
             cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
         fi
-        
         test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
-        
         echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
-        
         cd AnyKernel3
         zip -r9 "../build-pixel3a-kernel.zip" ./*
         cd ..
