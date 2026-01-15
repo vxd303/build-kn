@@ -1,5 +1,5 @@
-name: 'Pixel 3a Kernel Build - Definitive Working Version'
-description: "A simplified, corrected action based on the proven working example, with YAML syntax fixes."
+name: 'Pixel 3a Kernel Build - Optimized & Final'
+description: "Builds Pixel 3a kernel with aggressive disk cleanup and optimized settings."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -11,46 +11,56 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: 'Setup Environment & Dependencies'
+    - name: '1. Free Up Disk Space on Runner'
+      shell: bash
+      run: |
+        echo "Initial free space:"
+        df -h
+        # DỌN DẸP CÁC GÓI LỚN KHÔNG CẦN THIẾT
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/android
+        # Dọn dẹp các image docker không sử dụng
+        sudo docker image prune -af || true
+        sudo apt-get clean
+        echo "Free space after cleanup:"
+        df -h
+
+    - name: '2. Setup Environment & Dependencies'
       shell: bash
       run: |
         set -e
         sudo apt-get update
         sudo apt-get install --no-install-recommends -y git build-essential zip curl libssl-dev bc device-tree-compiler python3 aria2
-        aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh && NONINTERACTIVE=1 bash ./uninstall.sh -f -q || true
-        sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+        
+        # GIẢM SWAP XUỐNG 8GB ĐỂ TRÁNH ĐẦY Ổ ĐĨA
+        sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+        echo "Swap setup with 8GB."
+        free -h
 
-    - name: 'Build Kernel'
+    - name: '3. Build Kernel'
       shell: bash
       run: |
         set -e
-        # 1. TẢI TOOLCHAINS (Clang + GCC)
+        # Tải Toolchains
         echo "::group::Downloading Toolchains"
         mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        aria2c -x 16 -s 16 -o aosp-clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902.tar.gz
-        tar -C $HOME/clang -zxf aosp-clang.tar.gz
-        aria2c -x 16 -s 16 -o gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz
-        tar -C $HOME/gcc-64 -zxf gcc-aarch64.tar.gz
-        aria2c -x 16 -s 16 -o gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz
-        tar -C $HOME/gcc-32 -zxf gcc-arm.tar.gz
+        aria2c -x 16 -s 16 -o aosp-clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-release/clang-r383902.tar.gz && tar -C $HOME/clang -zxf aosp-clang.tar.gz && rm aosp-clang.tar.gz
+        aria2c -x 16 -s 16 -o gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-64 -zxf gcc-aarch64.tar.gz && rm gcc-aarch64.tar.gz
+        aria2c -x 16 -s 16 -o gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz && tar -C $HOME/gcc-32 -zxf gcc-arm.tar.gz && rm gcc-arm.tar.gz
         export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
         echo "::endgroup::"
         
-        # 2. CLONE ĐÚNG SOURCE VÀ BRANCH
+        # Clone đúng source và branch
         echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
-        KERNEL_URL="https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git"
-        KERNEL_BRANCH="twelve"
-        git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
+        git clone --depth=1 "https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git" -b "twelve" kernel_src
         cd kernel_src
-        echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
         echo "::endgroup::"
         
-        # 3. BUILD KERNEL VỚI LỆNH CHUNG (y hệt action thành công)
+        # Build Kernel với lệnh chung
         echo "::group::Building Kernel"
         mkdir -p out
-        # Lệnh make đầu tiên để áp dụng config
         make O=out ARCH=arm64 b1c1_defconfig
-        # Lệnh make thứ hai để build toàn bộ
         make -j$(nproc) O=out ARCH=arm64 \
             CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
@@ -59,8 +69,7 @@ runs:
             all
         echo "::endgroup::"
 
-    # --- PHẦN SỬA LỖI YAML ---
-    - name: 'Packaging AnyKernel3'
+    - name: '4. Packaging AnyKernel3'
       env:
         ANYKERNEL_SCRIPT: |
           # AnyKernel3 Ramdisk Mod Script
@@ -88,32 +97,26 @@ runs:
         echo "::group::Packaging AnyKernel3"
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3
         
-        # Logic sao chép y hệt action thành công
+        # Logic sao chép linh hoạt
         if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
             cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
-            echo "Copied Image.*-dtb"
         elif [ -f kernel_src/out/arch/arm64/boot/Image.* ]; then
             cp kernel_src/out/arch/arm64/boot/Image.* AnyKernel3/ -v
-            echo "Copied Image.*"
         else
             cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
-            echo "Copied raw Image"
         fi
         
-        # Sao chép dtbo.img nếu có
         test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
         
-        # Tạo file anykernel.sh một cách an toàn
         echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
         
-        # Tạo file zip
         cd AnyKernel3
         zip -r9 "../build-pixel3a-kernel.zip" ./*
         cd ..
-        echo "✅ Flashable zip created: build-pixel3a-kernel.zip"
+        echo "✅ Flashable zip created."
         echo "::endgroup::"
     
-    - name: 'Upload Artifact'
+    - name: '5. Upload Artifact'
       uses: actions/upload-artifact@v4
       with:
         name: pixel3a-kernel-zip
