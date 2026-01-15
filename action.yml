@@ -1,5 +1,5 @@
-name: 'Pixel 3a Kernel Build - Final Working Version'
-description: "A simplified and corrected action based on a proven working example."
+name: 'Pixel 3a Kernel Build - Definitive Working Version'
+description: "A simplified, corrected action based on the proven working example, with YAML syntax fixes."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -16,7 +16,7 @@ runs:
       run: |
         set -e
         sudo apt-get update
-        sudo apt-get install --no-install-recommends -y git ccache build-essential zip curl libssl-dev libxml2-utils bc device-tree-compiler python3 aria2
+        sudo apt-get install --no-install-recommends -y git build-essential zip curl libssl-dev bc device-tree-compiler python3 aria2
         aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh && NONINTERACTIVE=1 bash ./uninstall.sh -f -q || true
         sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 
@@ -45,21 +45,47 @@ runs:
         echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
         echo "::endgroup::"
         
-        # 3. BUILD KERNEL VỚI LỆNH CHUNG
+        # 3. BUILD KERNEL VỚI LỆNH CHUNG (y hệt action thành công)
         echo "::group::Building Kernel"
         mkdir -p out
-        make -j$(nproc) O=out ARCH=arm64 b1c1_defconfig
+        # Lệnh make đầu tiên để áp dụng config
+        make O=out ARCH=arm64 b1c1_defconfig
+        # Lệnh make thứ hai để build toàn bộ
         make -j$(nproc) O=out ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CC=clang \
             all
         echo "::endgroup::"
-        
-        # 4. ĐÓNG GÓI VỚI LOGIC TÌM KIẾM LINH HOẠT
+
+    # --- PHẦN SỬA LỖI YAML ---
+    - name: 'Packaging AnyKernel3'
+      env:
+        ANYKERNEL_SCRIPT: |
+          # AnyKernel3 Ramdisk Mod Script
+          properties() {
+          kernel.string=Custom Kernel for Pixel 3a/3a XL by GitHub Actions
+          do.devicecheck=1; do.modules=0; do.systemless=1; do.cleanup=1; do.cleanuponabort=0;
+          device.name1=sargo; device.name2=bonito; supported.versions=10-13;
+          }
+          . tools/ak3-core.sh;
+          dump_boot;
+          kernel_image=$(find . -name "Image.*" | head -n 1);
+          if [ -n "$kernel_image" ]; then
+            mv -f "$kernel_image" "$split_img/boot.img-kernel";
+          else
+            ui_print " ! No kernel image found in zip";
+            exit 1;
+          fi;
+          write_boot;
+          if [ -f dtbo.img ]; then
+            flash_dtbo;
+          fi;
+      shell: bash
+      run: |
+        set -e
         echo "::group::Packaging AnyKernel3"
-        cd .. # Quay lại thư mục gốc của workspace
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3
         
         # Logic sao chép y hệt action thành công
@@ -77,28 +103,8 @@ runs:
         # Sao chép dtbo.img nếu có
         test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
         
-        # Cấu hình AnyKernel3
-        cat > AnyKernel3/anykernel.sh <<'EOAKS'
-# AnyKernel3 Ramdisk Mod Script
-properties() {
-kernel.string=Custom Kernel for Pixel 3a/3a XL by GitHub Actions
-do.devicecheck=1; do.modules=0; do.systemless=1; do.cleanup=1; do.cleanuponabort=0;
-device.name1=sargo; device.name2=bonito; supported.versions=10-13;
-}
-. tools/ak3-core.sh;
-dump_boot;
-kernel_image=$(find . -name "Image.*" | head -n 1);
-if [ -n "$kernel_image" ]; then
-  mv -f "$kernel_image" "$split_img/boot.img-kernel";
-else
-  ui_print " ! No kernel image found in zip";
-  exit 1;
-fi;
-write_boot;
-if [ -f dtbo.img ]; then
-  flash_dtbo;
-fi;
-EOAKS
+        # Tạo file anykernel.sh một cách an toàn
+        echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
         
         # Tạo file zip
         cd AnyKernel3
