@@ -232,49 +232,35 @@ runs:
         echo "::endgroup::"
 
         echo "::group::Configuring AnyKernel3"
-        cat > AnyKernel3/anykernel.sh << 'EOF'
-# AnyKernel3 Ramdisk Mod Script
-# osm0sis @ xda-developers
-
-## AnyKernel setup
-properties() { '
-kernel.string=Custom Kernel for Pixel 3a (sargo) by YOUR_NAME
-do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=sargo
-device.name2=bonito
-device.name3=Pixel 3a
-supported.versions=10-13
-supported.patchlevels=
-'; }
-
-## AnyKernel methods (DO NOT CHANGE)
-# import patching functions/variables - see for reference
-. tools/ak3-core.sh
-
-## AnyKernel boot install
-dump_boot
-
-# Patch kernel
-if [ -f Image.lz4-dtb ]; then
-    mv -f Image.lz4-dtb $split_img/boot.img-kernel
-    echo "ui_print - Flashing Image.lz4-dtb (with DTB)"
-elif [ -f Image.gz-dtb ]; then
-    mv -f Image.gz-dtb $split_img/boot.img-kernel
-    echo "ui_print - Flashing Image.gz-dtb (with DTB)"
-else
-    ui_print "Error: No kernel image found!"
-    exit 1
-fi
-
-write_boot
-flash_dtbo
-
-## end boot install
-EOF
+        cat > AnyKernel3/anykernel.sh <<'EOAKS'
+        # AnyKernel3 Ramdisk Mod Script
+        # osm0sis @ xda-developers
+        
+        properties() {
+        kernel.string=Custom Kernel for Pixel 3a
+        do.devicecheck=1
+        do.modules=0
+        do.systemless=1
+        do.cleanup=1
+        do.cleanuponabort=0
+        device.name1=sargo
+        device.name2=bonito
+        supported.versions=10-13
+        }
+        
+        . tools/ak3-core.sh
+        
+        dump_boot
+        
+        if [ -f Image.lz4-dtb ]; then
+            mv -f Image.lz4-dtb $split_img/boot.img-kernel
+        elif [ -f Image.gz-dtb ]; then
+            mv -f Image.gz-dtb $split_img/boot.img-kernel
+        fi
+        
+        write_boot
+        flash_dtbo
+        EOAKS
         chmod +x AnyKernel3/anykernel.sh
         echo "::endgroup::"
 
