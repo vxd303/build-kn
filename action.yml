@@ -1,18 +1,17 @@
-name: 'Android Kernel Build Action - Pixel 3a Fixed (Definitive v2)'
-description: "Correctly finds DTS source, compiles, and appends the full DTB for Pixel 3a."
+name: 'Pixel 3a Kernel Build - PixelExperience Source'
+description: "Builds Pixel 3a kernel using the correct PixelExperience source and branch."
 branding:
   icon: 'activity'
   color: 'blue'
 
 inputs:
-  kernel-url:
-    required: true
+  # Không cần URL và branch nữa, chúng ta sẽ cố định chúng.
   repo-token:
     required: true
-  kernel-branch:
-    required: true
   config:
+    description: 'The defconfig to use. Should be b1c1_defconfig for this setup.'
     required: true
+    default: 'b1c1_defconfig' # Đặt mặc định là config của bạn
   arch:
     default: arm64
   aosp-clang-version:
@@ -42,7 +41,7 @@ runs:
         SU ln -sf /usr/bin/python2.7 /usr/bin/python
         echo "::endgroup::"
 
-    - name: 'Build Kernel & Correctly Append DTB'
+    - name: 'Build Kernel with Correct Source & Branch'
       shell: bash
       run: |
         set -e
@@ -58,59 +57,41 @@ runs:
         export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
         echo "::endgroup::"
 
-        # Clone source
-        echo "::group::Cloning Kernel Source"
-        KURL=$(echo "${{ inputs.kernel-url }}" | sed 's|https://||')
-        git clone --depth=1 "https://x-oauth-basic:${{ inputs.repo-token }}@$KURL" -b "${{ inputs.kernel-branch }}" kernel_src
+        # --- PHẦN QUAN TRỌNG NHẤT: CLONE ĐÚNG SOURCE VÀ BRANCH ---
+        echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
+        KERNEL_URL="https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git"
+        KERNEL_BRANCH="eleven-plus" # Branch cho Android 11
+        git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
         cd kernel_src
+        echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
         echo "::endgroup::"
 
         # Prepare config
         echo "::group::Preparing Config"
         DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
+        if [ ! -f "$DEST_CONF" ]; then
+            echo "::error::Config '${{ inputs.config }}' not found in this branch."
+            exit 1
+        fi
         sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF" || true
         sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF" || true
         grep -q "CONFIG_LTO_NONE" "$DEST_CONF" || echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
         echo "::endgroup::"
 
-        # --- PHẦN SỬA LỖI LOGIC ---
-        echo "::group::Compiling and Appending DTB from Source Root"
+        # --- QUAY LẠI PHƯƠNG PHÁP BUILD ĐƠN GIẢN VÀ ĐÁNG TIN CẬY NHẤT ---
+        echo "::group::Compiling Kernel using 'make Image.lz4-dtb'"
         mkdir -p out
         ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
         
-        # 1. Build kernel và dtbs riêng biệt. Chúng ta đang ở thư mục kernel_src
+        # Với mã nguồn và branch đúng, 'make' sẽ tự động làm đúng mọi việc.
         make $ARGS ${{ inputs.config }}
-        make -j$(nproc) $ARGS Image.lz4 dtbs dtbo.img
+        make -j$(nproc) $ARGS Image.lz4-dtb dtbo.img
 
-        # 2. Xác định các đường dẫn. TẤT CẢ đều được tính từ thư mục hiện tại (kernel_src)
-        DTS_SOURCE_PATH="arch/arm64/boot/dts/qcom/sdm670-sargo-idp.dts"
-        DTC_INCLUDE_PATH="arch/arm64/boot/dts" # Đường dẫn để dtc tìm các file #include
-        COMPILED_DTB_PATH="out/custom-sargo.dtb" # Nơi lưu file .dtb đã biên dịch
-        KERNEL_IMAGE_PATH="out/arch/arm64/boot/Image.lz4"
-        FINAL_IMAGE_PATH="out/arch/arm64/boot/Image.lz4-dtb"
-
-        # 3. Kiểm tra file .dts nguồn có tồn tại hay không TRƯỚC KHI làm gì khác
-        if [ ! -f "$DTS_SOURCE_PATH" ]; then
-            echo "::error::Critical: The main DTS source file ($DTS_SOURCE_PATH) was not found in the kernel source."
-            echo "Listing contents of arch/arm64/boot/dts/qcom/ to help debug:"
-            ls -l arch/arm64/boot/dts/qcom/
-            exit 1
-        fi
-        
-        # 4. Dùng `dtc` để biên dịch .dts thành .dtb
-        echo "Compiling full DTB from $DTS_SOURCE_PATH using 'dtc'..."
-        dtc -@ -I "$DTC_INCLUDE_PATH" -O dtb -o "$COMPILED_DTB_PATH" "$DTS_SOURCE_PATH"
-        
-        # 5. Nối kernel với file DTB vừa biên dịch
-        echo "Appending custom-compiled DTB to kernel..."
-        cat "$KERNEL_IMAGE_PATH" "$COMPILED_DTB_PATH" > "$FINAL_IMAGE_PATH"
-
-        # 6. Kiểm tra kích thước lần cuối
-        SIZE_FINAL=$(stat -c%s "$FINAL_IMAGE_PATH")
+        SIZE_FINAL=$(stat -c%s out/arch/arm64/boot/Image.lz4-dtb)
         echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
 
         if [ $SIZE_FINAL -lt 17000000 ]; then
-            echo "::warning::Final image size is still smaller than expected. Check kernel source config."
+            echo "::warning::Final image size is smaller than expected."
         else
             echo "✅ Final image size looks correct (>= 17MB)."
         fi
