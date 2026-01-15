@@ -17,7 +17,7 @@ inputs:
   aosp-clang-version:
     default: "r383902"
   android-version:
-    default: "11"
+    default: "12"
 
 runs:
   using: 'composite'
@@ -60,7 +60,7 @@ runs:
         # --- PHẦN QUAN TRỌNG NHẤT: CLONE ĐÚNG SOURCE VÀ BRANCH ---
         echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
         KERNEL_URL="https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git"
-        KERNEL_BRANCH="eleven-plus" # Branch cho Android 11
+        KERNEL_BRANCH="twelve" # Branch cho Android 11
         git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
         cd kernel_src
         echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
