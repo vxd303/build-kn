@@ -41,60 +41,62 @@ runs:
         SU ln -sf /usr/bin/python2.7 /usr/bin/python
         echo "::endgroup::"
 
-    - name: 'Build Kernel with Correct Source & Branch'
+    - name: '2. Build Kernel Components & Manually Append DTB'
       shell: bash
       run: |
         set -e
-        # Download toolchains
-        download_toolchain() {
-            aria2c -x 16 -s 16 -k 1M -d "$2" -o "$(basename $1)" "$1" && tar -C "$2" -xf "$2/$(basename $1)" && rm -f "$2/$(basename $1)"
-        }
-        echo "::group::Downloading Toolchains"
+        # Tải Toolchains đồng bộ cho Android 12
+        echo "::group::Downloading SYNCHRONIZED Toolchains for Android 12"
         mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "$HOME/clang"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-64"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-32"
-        export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
+        aria2c -x 16 -s 16 -o clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r383902b.tar.gz" && tar -C $HOME/clang -zxf clang.tar.gz && rm clang.tar.gz
+        aria2c -x 16 -s 16 -o gcc64.tar.gz "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android12-release.tar.gz" && tar -C $HOME/gcc-64 -zxf gcc64.tar.gz && rm gcc64.tar.gz
+        aria2c -x 16 -s 16 -o gcc32.tar.gz "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android12-release.tar.gz" && tar -C $HOME/gcc-32 -zxf gcc32.tar.gz && rm gcc32.tar.gz
+        export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
         echo "::endgroup::"
-
-        # --- PHẦN QUAN TRỌNG NHẤT: CLONE ĐÚNG SOURCE VÀ BRANCH ---
-        echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
-        KERNEL_URL="https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git"
-        KERNEL_BRANCH="twelve" # Branch cho Android 11
-        git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
+        
+        # Clone đúng source và branch
+        echo "::group::Cloning PixelExperience Kernel Source"
+        git clone --depth=1 "https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git" -b "twelve" kernel_src
         cd kernel_src
-        echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
         echo "::endgroup::"
-
-        # Prepare config
-        echo "::group::Preparing Config"
-        DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-        if [ ! -f "$DEST_CONF" ]; then
-            echo "::error::Config '${{ inputs.config }}' not found in this branch."
+        
+        # --- LOGIC BUILD VÀ NỐI FILE CUỐI CÙNG ---
+        echo "::group::Building Components and Manually Appending DTB"
+        mkdir -p out
+        ARGS="O=out ARCH=arm64 CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+        
+        # 1. Build config
+        make -j1 $ARGS b1c1_defconfig
+        
+        # 2. Build CÁC THÀNH PHẦN RIÊNG LẺ, không phải 'all'
+        make -j1 $ARGS Image.lz4 dtbs dtbo.img
+        
+        # 3. Đi vào thư mục chứa kết quả
+        cd out/arch/arm64/boot/
+        
+        # 4. Xác định file DTB đã được biên dịch cho sargo
+        #    Sau khi chạy 'make dtbs', file này PHẢI tồn tại
+        SARGO_DTB="dts/qcom/sdm670-sargo-idp.dtb"
+        
+        if [ ! -f "$SARGO_DTB" ]; then
+            echo "::error::Critical Failure: '$SARGO_DTB' was not created after 'make dtbs'. The kernel source might be missing files even on this branch."
+            ls -lR dts/qcom/
             exit 1
         fi
-        sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF" || true
-        sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF" || true
-        grep -q "CONFIG_LTO_NONE" "$DEST_CONF" || echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
-        echo "::endgroup::"
 
-        # --- QUAY LẠI PHƯƠNG PHÁP BUILD ĐƠN GIẢN VÀ ĐÁNG TIN CẬY NHẤT ---
-        echo "::group::Compiling Kernel using 'make Image.lz4-dtb'"
-        mkdir -p out
-        ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
+        # 5. TỰ TAY NỐI FILE
+        echo "Manually appending '$SARGO_DTB' to Image.lz4..."
+        cat Image.lz4 "$SARGO_DTB" > Image.lz4-dtb
         
-        # Với mã nguồn và branch đúng, 'make' sẽ tự động làm đúng mọi việc.
-        make $ARGS ${{ inputs.config }}
-        make -j$(nproc) $ARGS Image.lz4-dtb dtbo.img
-
-        SIZE_FINAL=$(stat -c%s out/arch/arm64/boot/Image.lz4-dtb)
-        echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
-
+        # 6. KIỂM TRA KÍCH THƯỚC CUỐI CÙNG
+        SIZE_FINAL=$(stat -c%s Image.lz4-dtb)
+        echo "📦 Final combined image size is: $((SIZE_FINAL / 1024 / 1024)) MB"
         if [ $SIZE_FINAL -lt 17000000 ]; then
-            echo "::warning::Final image size is smaller than expected."
+            echo "::error::Manual append failed. The size is still too small."
         else
-            echo "✅ Final image size looks correct (>= 17MB)."
+            echo "✅ SUCCESS! Final image size is correct."
         fi
+        cd ../../../../ # Quay lại thư mục kernel_src
         echo "::endgroup::"
         
     - name: '3. Package AnyKernel3 & Upload'
