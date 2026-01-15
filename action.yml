@@ -58,7 +58,7 @@ runs:
         
         # --- THAY ĐỔI QUAN TRỌNG NHẤT ĐỂ FIX LỖI HẾT RAM ---
         # Sử dụng -j1 để build tuần tự, tránh quá tải bộ nhớ
-        make -j2 O=out ARCH=arm64 \
+        make -j1 O=out ARCH=arm64 \
             CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
