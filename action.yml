@@ -1,5 +1,5 @@
-name: 'Android Kernel Build Action - Pixel 3a Fixed (Definitive)'
-description: "Correctly compiles and appends the full DTB for Pixel 3a (sargo)."
+name: 'Android Kernel Build Action - Pixel 3a Fixed (Definitive v2)'
+description: "Correctly finds DTS source, compiles, and appends the full DTB for Pixel 3a."
 branding:
   icon: 'activity'
   color: 'blue'
@@ -42,7 +42,7 @@ runs:
         SU ln -sf /usr/bin/python2.7 /usr/bin/python
         echo "::endgroup::"
 
-    - name: 'Build Kernel & Manually Compile/Append Correct DTB'
+    - name: 'Build Kernel & Correctly Append DTB'
       shell: bash
       run: |
         set -e
@@ -73,36 +73,40 @@ runs:
         grep -q "CONFIG_LTO_NONE" "$DEST_CONF" || echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
         echo "::endgroup::"
 
-        # --- PHẦN SỬA LỖI CUỐI CÙNG ---
-        echo "::group::Compiling and Appending DTB"
+        # --- PHẦN SỬA LỖI LOGIC ---
+        echo "::group::Compiling and Appending DTB from Source Root"
         mkdir -p out
         ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
         
-        # 1. Build kernel và dtbs riêng biệt
+        # 1. Build kernel và dtbs riêng biệt. Chúng ta đang ở thư mục kernel_src
         make $ARGS ${{ inputs.config }}
         make -j$(nproc) $ARGS Image.lz4 dtbs dtbo.img
 
-        cd out
-        
-        # 2. Dùng `dtc` để biên dịch file .dts nguồn thành file .dtb hoàn chỉnh
-        #    Đây là file nguồn chính cho Pixel 3a, nó sẽ tự #include các overlay khác.
-        CORRECT_DTS_SOURCE="arch/arm64/boot/dts/qcom/sdm670-sargo-idp.dts"
-        
-        if [ ! -f "$CORRECT_DTS_SOURCE" ]; then
-            echo "::error::Critical: The main DTS source file ($CORRECT_DTS_SOURCE) was not found."
+        # 2. Xác định các đường dẫn. TẤT CẢ đều được tính từ thư mục hiện tại (kernel_src)
+        DTS_SOURCE_PATH="arch/arm64/boot/dts/qcom/sdm670-sargo-idp.dts"
+        DTC_INCLUDE_PATH="arch/arm64/boot/dts" # Đường dẫn để dtc tìm các file #include
+        COMPILED_DTB_PATH="out/custom-sargo.dtb" # Nơi lưu file .dtb đã biên dịch
+        KERNEL_IMAGE_PATH="out/arch/arm64/boot/Image.lz4"
+        FINAL_IMAGE_PATH="out/arch/arm64/boot/Image.lz4-dtb"
+
+        # 3. Kiểm tra file .dts nguồn có tồn tại hay không TRƯỚC KHI làm gì khác
+        if [ ! -f "$DTS_SOURCE_PATH" ]; then
+            echo "::error::Critical: The main DTS source file ($DTS_SOURCE_PATH) was not found in the kernel source."
+            echo "Listing contents of arch/arm64/boot/dts/qcom/ to help debug:"
+            ls -l arch/arm64/boot/dts/qcom/
             exit 1
         fi
         
-        echo "Compiling full DTB from $CORRECT_DTS_SOURCE using 'dtc'..."
-        # Lệnh dtc sẽ đọc file .dts và tất cả các file nó #include, tạo ra 1 file .dtb duy nhất
-        dtc -@ -I dts -O dtb -o custom-sargo.dtb "$CORRECT_DTS_SOURCE"
+        # 4. Dùng `dtc` để biên dịch .dts thành .dtb
+        echo "Compiling full DTB from $DTS_SOURCE_PATH using 'dtc'..."
+        dtc -@ -I "$DTC_INCLUDE_PATH" -O dtb -o "$COMPILED_DTB_PATH" "$DTS_SOURCE_PATH"
         
-        # 3. Nối kernel với file DTB vừa được biên dịch đúng cách
+        # 5. Nối kernel với file DTB vừa biên dịch
         echo "Appending custom-compiled DTB to kernel..."
-        cat arch/arm64/boot/Image.lz4 custom-sargo.dtb > arch/arm64/boot/Image.lz4-dtb
+        cat "$KERNEL_IMAGE_PATH" "$COMPILED_DTB_PATH" > "$FINAL_IMAGE_PATH"
 
-        # 4. Kiểm tra kích thước lần cuối
-        SIZE_FINAL=$(stat -c%s arch/arm64/boot/Image.lz4-dtb)
+        # 6. Kiểm tra kích thước lần cuối
+        SIZE_FINAL=$(stat -c%s "$FINAL_IMAGE_PATH")
         echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
 
         if [ $SIZE_FINAL -lt 17000000 ]; then
@@ -110,16 +114,14 @@ runs:
         else
             echo "✅ Final image size looks correct (>= 17MB)."
         fi
-        cd ..
         echo "::endgroup::"
-
+        
     - name: Packaging AnyKernel3
-      # --- ĐÂY LÀ PHẦN SỬA LỖI YAML ---
+      # Bước này và các bước sau giữ nguyên y hệt phiên bản trước, không cần thay đổi
       env:
         ANYKERNEL_SCRIPT: |
           # AnyKernel3 Ramdisk Mod Script
           # osm0sis @ xda-developers
-
           properties() {
           kernel.string=Custom Kernel for Pixel 3a/3a XL by GitHub Actions
           do.devicecheck=1
@@ -131,27 +133,23 @@ runs:
           device.name2=bonito
           supported.versions=10-13
           }
-
           # shell variables
           . tools/ak3-core.sh;
-
           dump_boot;
-
           if [ -f Image.lz4-dtb ]; then
             mv -f Image.lz4-dtb "$split_img/boot.img-kernel";
           else
             ui_print " ! Kernel image (Image.lz4-dtb) not found in zip";
             exit 1;
           fi;
-
           write_boot;
-
           if [ -f dtbo.img ]; then
             flash_dtbo;
           fi;
       shell: bash
       run: |
         set -e
+        # Chú ý: đường dẫn KERNEL_OUT phải được tính từ thư mục gốc của workspace
         KERNEL_OUT="kernel_src/out/arch/${{ inputs.arch }}/boot"
         ZIP_OUT="build-pixel3a-kernel.zip"
         
@@ -164,7 +162,7 @@ runs:
             cp "$KERNEL_OUT/Image.lz4-dtb" AnyKernel3/Image.lz4-dtb
             echo "✅ Using Image.lz4-dtb"
         else
-            echo "❌ Critical Error: Image.lz4-dtb not found after build!"
+            echo "❌ Critical Error: Final Image.lz4-dtb not found after build!"
             ls -lah "$KERNEL_OUT/"
             exit 1
         fi
@@ -176,13 +174,12 @@ runs:
             echo "⚠️ Warning: dtbo.img not found."
         fi
         echo "::endgroup::"
-
+        
         echo "::group::Configuring AnyKernel3"
-        # Ghi nội dung từ biến môi trường vào file
         echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
         chmod +x AnyKernel3/anykernel.sh
         echo "::endgroup::"
-
+        
         echo "::group::Creating flashable ZIP"
         cd AnyKernel3
         zip -r9 "../$ZIP_OUT" ./*
@@ -202,4 +199,3 @@ runs:
         echo "## 🎉 Pixel 3a Kernel Build Complete" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "- **Device**: Pixel 3a / 3a XL (sargo/bonito)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Time**: $(date)" >> $GITHUB_STEP_SUMMARY
