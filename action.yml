@@ -97,7 +97,7 @@ runs:
         fi
         echo "::endgroup::"
         
-     - name: '3. Package AnyKernel3 & Upload'
+    - name: '3. Package AnyKernel3 & Upload'
         env:
         ANYKERNEL_SCRIPT: |
           properties() {
