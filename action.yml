@@ -59,7 +59,7 @@ runs:
 
         # --- PHẦN QUAN TRỌNG NHẤT: CLONE ĐÚNG SOURCE VÀ BRANCH ---
         echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
-        KERNEL_URL="https://github.com/PixelExperience-Devices/kernel_google_msm-4.9.git"
+        KERNEL_URL="https://github.com/vxd303/test.git"
         KERNEL_BRANCH="twelve" # Branch cho Android 11
         git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
         cd kernel_src
