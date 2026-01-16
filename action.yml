@@ -1,176 +1,147 @@
-name: 'Pixel 3a Kernel Build - PixelExperience Source'
-description: "Builds Pixel 3a kernel using the correct PixelExperience source and branch."
+name: 'Android Kernel Build Action'
+description: "Final Stable Build - Upgraded for Pixel 3a"
+
 branding:
   icon: 'activity'
   color: 'blue'
 
 inputs:
-  # Không cần URL và branch nữa, chúng ta sẽ cố định chúng.
+  kernel-url:
+    required: true
   repo-token:
     required: true
-  config:
-    description: 'The defconfig to use. Should be b1c1_defconfig for this setup.'
+  kernel-branch:
     required: true
-    default: 'bonito_defconfig' # Đặt mặc định là config của bạn
+  config:
+    required: true
   arch:
     default: arm64
   aosp-clang-version:
     default: "r383902"
   android-version:
     default: "12"
+  anykernel3:
+    default: true
 
 runs:
   using: 'composite'
   steps:
-    - name: 'Setup Environment'
+    - name: Cleanup & Setup environment
       shell: bash
       run: |
-        set -e
-        # Các lệnh setup giữ nguyên
-        SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
-        echo "::group::Setup Environment"
-        if [ -f "/usr/local/bin/brew" ]; then
-          aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh && NONINTERACTIVE=1 bash ./uninstall.sh -f -q >/dev/null 2>&1 || true
-        fi
-        SU rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
-        SU fallocate -l 16G /swapfile && SU chmod 600 /swapfile && SU mkswap /swapfile && SU swapon /swapfile
-        echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
-        SU apt-get update && SU apt-get install --no-install-recommends -y binutils-aarch64-linux-gnu git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential
-        wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz && tar -xvf utils.tar.gz -C .
-        SU cp src/mkdtboimg.py /usr/bin/mkdtimg && SU chmod +x /usr/bin/mkdtimg
-        SU ln -sf /usr/bin/python2.7 /usr/bin/python
-        echo "::endgroup::"
+          set -e
+          SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
+          
+          # 1. Gỡ Homebrew và dọn dẹp PATH để tránh xung đột (Yếu tố thành công 1)
+          echo "::group:: Cleaning Runner"
+          aria2c -q https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh
+          NONINTERACTIVE=1 bash ./uninstall.sh -f -q
+          SU rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          echo "::endgroup::"
 
-    - name: 'Build Kernel with Correct Source & Branch'
+          # 2. Thiết lập Swap 16GB chuẩn (Yếu tố thành công 2)
+          echo "::group:: Setting Up 16GB Swap"
+          if [ -f /bin/swapon ]; then
+              export SWAP_FILE=$(swapon --show=NAME | tail -n 1)
+              [ ! -z "$SWAP_FILE" ] && SU swapoff $SWAP_FILE && SU rm -f $SWAP_FILE
+              SU fallocate -l 16G /swapfile
+              SU chmod 600 /swapfile
+              SU mkswap /swapfile
+              SU swapon /swapfile
+          fi
+          echo "::endgroup::"
+
+          # 3. Cài đặt dependencies và Python 2.7 (Quan trọng cho scripts Qualcomm)
+          echo "::group:: Installing Dependencies & mkdtimg"
+          echo "deb [trusted=yes] https://deb.debian.org/debian/ bullseye main contrib non-free" | SU tee -a /etc/apt/sources.list
+          SU apt-get update
+          SU apt-get install --no-install-recommends -y binutils binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi git make bc bison openssl curl zip kmod cpio flex libelf-dev libssl-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates python2.7 python3 xz-utils aria2 build-essential ccache parallel
+          
+          wget -q https://android.googlesource.com/platform/system/libufdt/+archive/refs/heads/master/utils.tar.gz
+          mkdir -p dtb-utils && tar -xvf utils.tar.gz -C dtb-utils
+          SU cp dtb-utils/src/mkdtboimg.py /usr/bin/mkdtimg
+          SU chmod +x /usr/bin/mkdtimg
+          SU ln -sf /usr/bin/python2.7 /usr/bin/python
+          echo "::endgroup::"
+
+    - name: Build Kernel
       shell: bash
       run: |
-        set -e
-        # Download toolchains
-        download_toolchain() {
-            aria2c -x 16 -s 16 -k 1M -d "$2" -o "$(basename $1)" "$1" && tar -C "$2" -xf "$2/$(basename $1)" && rm -f "$2/$(basename $1)"
-        }
-        echo "::group::Downloading Toolchains"
-        mkdir -p "$HOME/clang" "$HOME/gcc-64" "$HOME/gcc-32"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "$HOME/clang"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-64"
-        download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "$HOME/gcc-32"
-        export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
-        echo "::endgroup::"
+          set -e
+          SU() { [ "$(id -u)" -eq 0 ] && "$@" || sudo "$@"; }
 
-        # --- PHẦN QUAN TRỌNG NHẤT: CLONE ĐÚNG SOURCE VÀ BRANCH ---
-        echo "::group::Cloning PixelExperience Kernel Source (eleven-plus branch)"
-        KERNEL_URL="https://github.com/vxd303/test.git"
-        KERNEL_BRANCH="twelve" # Branch cho Android 11
-        git clone --depth=1 "$KERNEL_URL" -b "$KERNEL_BRANCH" kernel_src
-        cd kernel_src
-        echo "✅ Cloned from $KERNEL_URL on branch $KERNEL_BRANCH"
-        echo "::endgroup::"
-
-        # Prepare config
-        echo "::group::Preparing Config"
-        DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
-        if [ ! -f "$DEST_CONF" ]; then
-            echo "::error::Config '${{ inputs.config }}' not found in this branch."
-            exit 1
-        fi
-        sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF" || true
-        sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF" || true
-        grep -q "CONFIG_LTO_NONE" "$DEST_CONF" || echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
-        echo "::endgroup::"
-
-        # --- QUAY LẠI PHƯƠNG PHÁP BUILD ĐƠN GIẢN VÀ ĐÁNG TIN CẬY NHẤT ---
-        echo "::group::Compiling Kernel using 'make Image.lz4-dtb'"
-        mkdir -p out
-        ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang"
-        
-        # Với mã nguồn và branch đúng, 'make' sẽ tự động làm đúng mọi việc.
-        make $ARGS ${{ inputs.config }}
-        make -j$(nproc) $ARGS Image.lz4-dtb dtbo.img
-
-        echo "::group::DEBUG: Check chipid object build"
-
-        # Kiểm tra object có tồn tại không
-        if [ -f out/drivers/base/chipid.o ]; then
-            echo "✅ chipid.o exists"
-            ls -lh out/drivers/base/chipid.o
-        else
-            echo "::error::❌ chipid.o NOT FOUND – file not compiled"
-        fi
-        
-        # Kiểm tra symbol trong object
-        if command -v nm >/dev/null 2>&1; then
-            nm out/drivers/base/chipid.o | grep -i chipid || echo "⚠️ No chipid symbol in object"
-        fi
-        
-        echo "::endgroup::"
-
-        SIZE_FINAL=$(stat -c%s out/arch/arm64/boot/Image.lz4-dtb)
-        echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
-
-        if [ $SIZE_FINAL -lt 17000000 ]; then
-            echo "::warning::Final image size is smaller than expected."
-        else
-            echo "✅ Final image size looks correct (>= 17MB)."
-        fi
-        echo "::endgroup::"
-        
-    - name: '3. Package AnyKernel3 & Upload'
-      env:
-        ANYKERNEL_SCRIPT: |
-          properties() {
-          kernel.string=Custom Kernel for Pixel 3a/3a XL by vxd303
-          do.devicecheck=1; do.modules=0; do.systemless=1; do.cleanup=1; do.cleanuponabort=0;
-          device.name1=sargo; device.name2=bonito; supported.versions=10-13;
+          download_toolchain() {
+              local url=$1; local name=$2; local dir=$3;
+              mkdir -p "$dir"
+              aria2c -x 16 -s 16 -k 1M -o "${name}.tar.gz" "$url"
+              tar -C "$dir" -zxf "${name}.tar.gz"
+              rm -f "${name}.tar.gz"
           }
-          . tools/ak3-core.sh;
-          dump_boot;
-          kernel_image=$(find . -name "Image.*" | head -n 1);
-          if [ -n "$kernel_image" ]; then
-            mv -f "$kernel_image" "$split_img/boot.img-kernel";
-          else
-            ui_print " ! No kernel image found in zip";
-            exit 1;
-          fi;
-          write_boot;
-          if [ -f dtbo.img ]; then
-            flash_dtbo;
-          fi;
-      shell: bash
-      run: |
-        set -e
-        echo "::group::Packaging AnyKernel3"
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-        
-        # Logic sao chép linh hoạt đã được chứng minh
-        if [ -f kernel_src/out/arch/arm64/boot/Image.*-dtb ]; then
-            cp kernel_src/out/arch/arm64/boot/Image.*-dtb AnyKernel3/ -v
-        elif [ -f kernel_src/out/arch/arm64/boot/Image.lz4 ]; then
-            cp kernel_src/out/arch/arm64/boot/Image.lz4 AnyKernel3/ -v
-        elif [ -f kernel_src/out/arch/arm64/boot/Image.gz ]; then
-            cp kernel_src/out/arch/arm64/boot/Image.gz AnyKernel3/ -v
-        else
-            cp kernel_src/out/arch/arm64/boot/Image AnyKernel3/ -v
-        fi
-        
-        test -f kernel_src/out/arch/arm64/boot/dtbo.img && cp -v kernel_src/out/arch/arm64/boot/dtbo.img AnyKernel3/
-        
-        echo "$ANYKERNEL_SCRIPT" > AnyKernel3/anykernel.sh
-        
-        cd AnyKernel3
-        zip -r9 "../build-pixel3a-kernel.zip" ./*
-        cd ..
-        echo "✅ Flashable zip created."
-        echo "::endgroup::"
 
-    - name: Upload Artifact
+          # 4. Tải Toolchains AOSP chuẩn (Sử dụng bản GCC 13/r0.57 cho độ ổn định cao)
+          echo "::group:: Downloading Toolchains"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android${{ inputs.android-version }}-release/clang-${{ inputs.aosp-clang-version }}.tar.gz" "clang" "$HOME/clang"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "gcc64" "$HOME/gcc-64"
+          download_toolchain "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-13.0.0_r0.57.tar.gz" "gcc32" "$HOME/gcc-32"
+          
+          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:/usr/bin:/bin"
+          echo "::endgroup::"
+
+          echo "::group:: Cloning Kernel Source"
+          KURL=$(echo "${{ inputs.kernel-url }}" | sed 's|https://||')
+          git clone --depth=1 "https://x-oauth-basic:${{ inputs.repo-token }}@$KURL" -b "${{ inputs.kernel-branch }}" kernel_src
+          echo "::endgroup::"
+
+          cd kernel_src
+          
+          echo "::group:: Fixing Config"
+          DEST_CONF="arch/${{ inputs.arch }}/configs/${{ inputs.config }}"
+          REAL_CONF=$(find arch/${{ inputs.arch }}/configs -name "${{ inputs.config }}" | head -n 1)
+          [ "$(realpath $REAL_CONF)" != "$(realpath $DEST_CONF)" ] && cp -f "$REAL_CONF" "$DEST_CONF"
+
+          # Vô hiệu hóa LTO để tránh lỗi linker treo (Broken pipe)
+          sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/g' "$DEST_CONF"
+          sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/g' "$DEST_CONF"
+          echo "CONFIG_LTO_NONE=y" >> "$DEST_CONF"
+          echo "::endgroup::"
+
+          echo "::group:: Compiling"
+          mkdir -p out
+          # Sử dụng cấu trúc lệnh make chuẩn từ mã thành công
+          ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang MKDTIMG=mkdtimg LLVM=1 LLVM_IAS=1"
+          
+          make $ARGS ${{ inputs.config }}
+          # Giới hạn j3 để RAM không bị tràn gây Broken pipe
+          make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
+          echo "::endgroup::"
+
+          # 5. Logic đóng gói nâng cao (Yếu tố giúp file đạt 18MB và boot được)
+          if [ "${{ inputs.anykernel3 }}" = "true" ]; then
+              echo "::group:: Packaging AnyKernel3"
+              cd ..
+              git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
+              
+              # Tự động chọn Image chuẩn có kèm DTB (Hành vi của mã thành công)
+              if [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/Image.lz4-dtb ]; then
+                  cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image.lz4-dtb AnyKernel3/
+              elif [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/Image.*-dtb ]; then
+                  cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image.*-dtb AnyKernel3/
+              else
+                  cp kernel_src/out/arch/${{ inputs.arch }}/boot/Image.lz4 AnyKernel3/
+              fi
+
+              [ -f kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img ] && cp kernel_src/out/arch/${{ inputs.arch }}/boot/dtbo.img AnyKernel3/
+              
+              # Cấu hình AnyKernel cho máy A/B như Pixel 3a
+              sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+              sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
+              
+              cd AnyKernel3 && zip -r ../build.zip ./*
+              echo "::endgroup::"
+          fi
+
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: pixel3a-kernel-dtb-fixed
-        path: build-pixel3a-kernel.zip
-
-    - name: Build Summary
-      shell: bash
-      run: |
-        echo "## 🎉 Pixel 3a Kernel Build Complete" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **Device**: Pixel 3a / 3a XL (sargo/bonito)" >> $GITHUB_STEP_SUMMARY
+        name: kernel-result
+        path: build.zip
