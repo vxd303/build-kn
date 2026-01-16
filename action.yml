@@ -87,6 +87,23 @@ runs:
         make $ARGS ${{ inputs.config }}
         make -j$(nproc) $ARGS Image.lz4-dtb dtbo.img
 
+        echo "::group::DEBUG: Check chipid object build"
+
+        # Kiểm tra object có tồn tại không
+        if [ -f out/drivers/base/chipid.o ]; then
+            echo "✅ chipid.o exists"
+            ls -lh out/drivers/base/chipid.o
+        else
+            echo "::error::❌ chipid.o NOT FOUND – file not compiled"
+        fi
+        
+        # Kiểm tra symbol trong object
+        if command -v nm >/dev/null 2>&1; then
+            nm out/drivers/base/chipid.o | grep -i chipid || echo "⚠️ No chipid symbol in object"
+        fi
+        
+        echo "::endgroup::"
+
         SIZE_FINAL=$(stat -c%s out/arch/arm64/boot/Image.lz4-dtb)
         echo "📦 Final image size (Image.lz4-dtb): $((SIZE_FINAL / 1024 / 1024)) MB"
 
