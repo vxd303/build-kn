@@ -14,7 +14,7 @@ jobs:
         uses: vxd303/build-kn@main
         with:
           # Thay đổi URL chỉ còn đường dẫn repo
-          kernel-url: https://github.com/vxd303/test
+          kernel-url: https://github.com/vxd303/kernel_google_msm-4.9
           # Thêm tham số repo-token để xác thực
           repo-token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           pass-zip: ${{ secrets.PASSZIP }}
