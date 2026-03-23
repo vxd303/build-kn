@@ -109,7 +109,8 @@ runs:
           mkdir -p out
           # Sử dụng cấu trúc lệnh make chuẩn từ mã thành công
           ARGS="ARCH=${{ inputs.arch }} O=out CROSS_COMPILE=$HOME/gcc-64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$HOME/gcc-32/bin/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang MKDTIMG=mkdtimg LLVM=1 LLVM_IAS=1"
-          
+          export KBUILD_BUILD_USER=builder
+          export KBUILD_BUILD_HOST=android-build
           make $ARGS ${{ inputs.config }}
           # Giới hạn j3 để RAM không bị tràn gây Broken pipe
           make -j3 $ARGS all KCFLAGS="-Wno-error" HOSTCFLAGS="-Wno-error"
