@@ -390,6 +390,9 @@ runs:
 
          echo "::group:: Building Kernel with selected cross compiler"
          mkdir out -p -v
+         export KBUILD_BUILD_USER=builder
+         export KBUILD_BUILD_HOST=android-build
+         export KBUILD_BUILD_TIMESTAMP="Fri Sep 26 07:32:16 UTC 2025"
          COMMAND="make -j$(nproc --all) ${{ inputs.config }} ARCH=${{ inputs.arch }} all ${{ inputs.extra-cmd }} O=out"
 
          if [ -d "$HOME/clang/bin" ]; then
